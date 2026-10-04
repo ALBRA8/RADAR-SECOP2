@@ -43,3 +43,18 @@ Work Log:
 Stage Summary:
 - Estado del proyecto: MVP completo y operativo (Fases 1-5 de la especificación). Fase 6 (integración de presentación en SECOP II / Módulo I) pendiente por diseño, según la propia especificación.
 - No se requirió nuevo desarrollo en esta sesión; solo re-orientación y confirmación de estado.
+
+---
+Task ID: 3
+Agent: Super Z (agente principal)
+Task: Diagnosticar "enlace en blanco con error" reportado por el usuario.
+
+Work Log:
+- Verificada la app localmente: HTTP 200, APIs (company/opportunities/dashboard/alerts) respondiendo 200, queries Prisma sanas, dev.log sin errores.
+- Probados 3 formatos candidatos de URL de preview (session_id, chat_id, hostname FC): todos 404. El bot-id real de la plataforma no está expuesto en el entorno del contenedor (revisado env, .config, archivos de proyecto).
+- Verificación con agent-browser (Chromium headless): la app renderiza completa — título, navegación, KPIs, Top 5 con datos reales. Consola limpia (solo info de React DevTools + HMR). Sin errores de página.
+- Captura guardada en download/preview_panel_app.png como evidencia.
+
+Stage Summary:
+- Diagnóstico: la app está 100% operativa; el enlace fallido fue un URL construido con un identificador incorrecto (mi error, no de la app).
+- Instrucción al usuario: acceder vía el botón/panel de preview de la interfaz de chat, que resuelve el dominio correcto de la plataforma.
