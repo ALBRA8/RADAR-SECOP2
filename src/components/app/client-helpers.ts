@@ -60,6 +60,15 @@ export function normalizeOpp(o: Record<string, unknown>): OpportunityData {
     },
     requirements: (o.requirements as OpportunityData['requirements']) || [],
     proposals: proposals.map(normalizeProposal),
+    messages: ((o.messages || []) as Record<string, unknown>[]).map((m) => ({
+      id: String(m.id),
+      role: m.role as 'USUARIO' | 'AGENTE',
+      content: String(m.content || ''),
+      versionBefore: (m.versionBefore as number) ?? null,
+      versionAfter: (m.versionAfter as number) ?? null,
+      sectionsAffected: (m.sectionsAffected as string) ?? null,
+      createdAt: String(m.createdAt),
+    })),
   }
 }
 

@@ -14,11 +14,12 @@ import { StatusBadge, ScoreBadge, DimIcon, ReqStatusBadge, UnconfirmedWarn, Spin
 import {
   fmtCOP, fmtDate, fmtDateTime, daysUntil,
   DIM_COLORS,
-  type OpportunityData, type ProposalData,
+  type OpportunityData, type ProposalData, type ProposalMessageData,
 } from './client-types'
 import {
   ArrowLeft, ExternalLink, Landmark, Calendar, Tag, Clock,
   FilePlus2, Ban, CheckCircle2, Building2, UserCheck, FileCheck2, ShieldAlert, FileText,
+  MessagesSquare, Send, Bot, User,
 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
@@ -31,8 +32,10 @@ export function OpportunityDetailView({
   onApprovePrep,
   onGenerateProposal,
   onApproveProposal,
+  onRefineProposal,
   analyzing,
   generating,
+  refining,
 }: {
   opportunity: OpportunityData | null
   loading: boolean
@@ -42,8 +45,10 @@ export function OpportunityDetailView({
   onApprovePrep: (id: string) => void
   onGenerateProposal: (opportunityId: string) => void
   onApproveProposal: (proposalId: string, decision: 'APROBADA' | 'RECHAZADA', approver: string, notes: string) => void
+  onRefineProposal: (proposalId: string, instruction: string) => void
   analyzing: boolean
   generating: boolean
+  refining: boolean
 }) {
   const { toast } = useToast()
   const [discardOpen, setDiscardOpen] = useState(false)
@@ -326,10 +331,13 @@ export function OpportunityDetailView({
           ) : (
             <ProposalPanel
               proposal={latestProposal}
+              messages={o.messages || []}
               generating={generating}
+              refining={refining}
               onGenerate={() => onGenerateProposal(o.id)}
               onApprove={() => setApproveOpen(latestProposal)}
               onReject={(notes) => onApproveProposal(latestProposal.id, 'RECHAZADA', approver || 'Responsable', notes)}
+              onRefine={(instruction) => onRefineProposal(latestProposal.id, instruction)}
             />
           )}
         </TabsContent>
@@ -397,17 +405,42 @@ function InfoItem({ icon: Icon, label, value, strong }: { icon: typeof Landmark;
 
 function ProposalPanel({
   proposal,
+  messages,
   generating,
+  refining,
   onGenerate,
   onApprove,
   onReject,
+  onRefine,
 }: {
   proposal: ProposalData
+  messages: ProposalMessageData[]
   generating: boolean
+  refining: boolean
   onGenerate: () => void
   onApprove: () => void
   onReject: (notes: string) => void
+  onRefine: (instruction: string) => void
 }) {
+  const { toast } = useToast()
+  const [chatInput, setChatInput] = useState('')
+
+  const sendInstruction = () => {
+    const text = chatInput.trim()
+    if (!text) {
+      toast({ title: 'Escribe una instrucción para el agente', variant: 'destructive' })
+      return
+    }
+    onRefine(text)
+    setChatInput('')
+  }
+
+  const quickIdeas = [
+    'Haz el cronograma más agresivo sin perder realismo',
+    'Enfatiza la experiencia registrada más pertinente para el objeto',
+    'Ajusta la metodología a una ejecución con entregables por quincena',
+    'Refuerza el resumen ejecutivo con un gancho de valor más directo',
+  ]
   return (
     <>
       <Card>
@@ -471,6 +504,111 @@ function ProposalPanel({
                 </ul>
               </div>
             ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Refinamiento conversacional con el agente (Módulo G+) */}
+      {proposal.status === 'BORRADOR' && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessagesSquare className="w-5 h-5 text-emerald-600" aria-hidden />
+              Refina el proyecto con el agente
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              Habla con el agente en lenguaje natural: ajusta metodología, cronograma, enfoque o énfasis. Cada instrucción genera una nueva versión trazable, siempre sin inventar datos de la empresa.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="max-h-72 overflow-y-auto space-y-2.5 rounded-lg border bg-muted/30 p-3" aria-live="polite">
+              {messages.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-3">
+                  Aún no hay conversación. Pídele al agente el primer ajuste del borrador.
+                </p>
+              )}
+              {messages.map((m) => (
+                <div key={m.id} className={`flex gap-2 ${m.role === 'USUARIO' ? 'justify-end' : 'justify-start'}`}>
+                  {m.role === 'AGENTE' && (
+                    <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-600 text-white grid place-items-center mt-0.5" aria-hidden>
+                      <Bot className="w-3.5 h-3.5" />
+                    </span>
+                  )}
+                  <div
+                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
+                      m.role === 'USUARIO' ? 'bg-emerald-600 text-white' : 'bg-background border'
+                    }`}
+                  >
+                    {m.role === 'AGENTE' && m.versionAfter != null && (
+                      <p className="text-[11px] opacity-80 mb-1 flex flex-wrap items-center gap-1">
+                        v{m.versionBefore} → v{m.versionAfter}
+                        {(() => {
+                          try {
+                            const keys = JSON.parse(m.sectionsAffected || '[]') as string[]
+                            return keys.length > 0 ? ` · ${keys.join(', ')}` : ''
+                          } catch {
+                            return ''
+                          }
+                        })()}
+                      </p>
+                    )}
+                    <p className="whitespace-pre-wrap">{m.content}</p>
+                    <p className={`text-[10px] mt-1 ${m.role === 'USUARIO' ? 'text-emerald-100' : 'text-muted-foreground'}`}>
+                      {fmtDateTime(m.createdAt)}
+                    </p>
+                  </div>
+                  {m.role === 'USUARIO' && (
+                    <span className="shrink-0 w-6 h-6 rounded-full bg-muted text-muted-foreground grid place-items-center mt-0.5" aria-hidden>
+                      <User className="w-3.5 h-3.5" />
+                    </span>
+                  )}
+                </div>
+              ))}
+              {refining && (
+                <div className="flex gap-2 justify-start">
+                  <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-600 text-white grid place-items-center mt-0.5 animate-pulse" aria-hidden>
+                    <Bot className="w-3.5 h-3.5" />
+                  </span>
+                  <div className="bg-background border rounded-lg px-3 py-2 text-sm text-muted-foreground">
+                    El agente está rediseñando el proyecto…
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!refining && messages.length === 0 && (
+              <div className="flex flex-wrap gap-2">
+                {quickIdeas.map((idea) => (
+                  <button
+                    key={idea}
+                    onClick={() => onRefine(idea)}
+                    className="text-xs rounded-full border px-3 py-1.5 text-muted-foreground hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  >
+                    {idea}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <Input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    sendInstruction()
+                  }
+                }}
+                placeholder="Ej.: adapta la propuesta al sector salud y refuerza los indicadores de atención…"
+                aria-label="Instrucción para el agente"
+                disabled={refining}
+                className="min-h-11"
+              />
+              <Button onClick={sendInstruction} disabled={refining} className="bg-emerald-600 hover:bg-emerald-700 min-h-11 shrink-0">
+                <Send className="w-4 h-4 mr-1.5" aria-hidden /> {refining ? 'Refinando…' : 'Enviar'}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}

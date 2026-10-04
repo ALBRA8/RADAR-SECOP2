@@ -143,7 +143,8 @@ Analiza el proceso y produce el JSON.`
           engine: 'IA',
         }
       }
-    } catch {
+    } catch (err) {
+      console.error('[ai] analyzeOpportunity: motor IA falló, cae a reglas —', err instanceof Error ? err.message : err)
       // cae al motor de reglas
     }
   }
@@ -218,7 +219,7 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
   }
 }
 
-// ─── MÓDULO G: generación de propuesta ──────────────────────
+// ─── MÓDULO G: generación de propuesta — MODO AGENTE PROYECTISTA ─────
 
 export interface ProposalDraft {
   sections: ProposalSection[]
@@ -226,6 +227,18 @@ export interface ProposalDraft {
   unconfirmedCount: number
   engine: 'IA' | 'REGLAS'
 }
+
+const DEEP_SECTION_SPEC = `1. "resumen_ejecutivo" — Resumen ejecutivo: 2-3 párrafos que presenten la comprensión de la necesidad, la solución propuesta y el diferencial de la empresa. Debe enganchar al evaluador en los primeros renglones.
+2. "entendimiento" — Entendimiento del objeto y contexto: qué necesita realmente la entidad, el problema de fondo detrás del objeto, contexto territorial/institucional relevante y condiciones del proceso (duración, lugar, modalidad).
+3. "solucion" — Solución propuesta: el enfoque de solución adaptado PUNTO POR PUNTO a la necesidad. Describe el alcance, los componentes de la solución y cómo cada componente responde a una parte del objeto. Explica el diferencial metodológico de la propuesta.
+4. "metodologia" — Metodología y plan de trabajo: fases numeradas (Fase 1, Fase 2…) con actividades concretas, productos/entregables por fase y cómo se controla la calidad. Debe ser una metodología realista para el tipo de contrato y coherente con los servicios registrados de la empresa.
+5. "cronograma" — Cronograma tentativo: distribución por fases contra la duración publicada (o [POR CONFIRMAR: plazo] si no está publicada). Usa una lista o tabla simple de fases con semanas/mes correspondiente.
+6. "equipo" — Equipo y organización: roles necesarios y perfil de cada rol (responsable, apoyo técnico, logística), organización del trabajo y canales de coordinación con la entidad. NO inventes nombres ni hojas de vida: usa [POR CONFIRMAR: nombre del profesional] donde falte.
+7. "indicadores" — Indicadores de éxito: 3-6 indicadores medibles alineados con el objeto (producto, oportunidad, calidad, satisfacción), con fórmula y meta referencial.
+8. "gestion_riesgos" — Gestión de riesgos del proyecto: 3-5 riesgos propios de la ejecución (no de la participación), con mitigación concreta cada uno.
+9. "por_que_nosotros" — Por qué esta empresa: argumenta SOLO con la experiencia, productos/servicios y documentos registrados de la empresa, conectándolos explícitamente con el objeto. Si la evidencia es poca, sé honesto y enfatiza capacidad y enfoque, sin exagerar.
+10. "estructura_economica" — Estructura económica (plantilla): SIEMPRE "unconfirmed": true. Plantilla de tabla Concepto|Valor con [POR CONFIRMAR] en cada valor, más el presupuesto oficial de referencia y la advertencia de que el precio lo define la empresa.
+11. "anexos" — Anexos y documentos de la oferta: lista de anexos exigibles según el tipo de proceso y la matriz de requisitos, indicando cuáles ya están en el expediente y cuáles faltan.`
 
 export async function generateProposal(
   rec: RawSecopRecord,
@@ -235,29 +248,45 @@ export async function generateProposal(
   const zai = await getZai()
   if (zai) {
     try {
-      const system = `Eres un redactor experto de propuestas para procesos de contratación pública colombiana (SECOP II).
+      const system = `Eres un AGENTE PROYECTISTA experto en contratación pública colombiana (SECOP II, Ley 80 de 1993, Ley 2171 de 2021).
+Tu misión: diseñar un PROYECTO COMPLETO e IRRESISTIBLE para responder a un proceso de contratación, adaptado a los requerimientos específicos de la oferta.
+
+QUÉ HACE IRRESISTIBLE UNA PROPUESTA (aplícalo):
+- Demuestra entendimiento profundo del problema de la entidad, no solo del texto del objeto.
+- Responde punto por punto a la necesidad con una metodología concreta y realista.
+- Habla el idioma del evaluador: enfoque metodológico, entregables verificables, equipo con roles claros, cronograma cumplible, riesgos gestionados e indicadores medibles.
+- Argumenta el diferencial de la empresa con EVIDENCIA, sin inflarla.
 
 REGLAS ABSOLUTAS — NO NEGOCIABLES:
-1. NUNCA inventes experiencia, contratos, certificaciones, capacidades, precios, cifras económicas, firmas, documentos ni declaraciones.
-2. Usa ÚNICAMENTE la información registrada de la empresa que aparece abajo.
+1. NUNCA inventes experiencia, contratos, certificaciones, capacidades, precios, cifras económicas, firmas, documentos, nombres de personas ni declaraciones.
+2. Usa ÚNICAMENTE la información registrada de la empresa que aparece abajo. La persuasión sale de la estructura y el argumento, no de datos inventados.
 3. Cuando la propuesta necesite un dato que la empresa no tiene registrado, escribe literalmente [POR CONFIRMAR: qué dato falta] y marca la sección con "unconfirmed": true.
 4. NO propongas valores económicos: la estructura económica queda como plantilla para que la empresa la diligencie.
+5. Escribe en español colombiano profesional, con concreción (nada de relleno genérico). Cada párrafo debe aportar información.
 
-Devuelve EXCLUSIVAMENTE JSON válido:
+Devuelve EXCLUSIVAMENTE JSON válido con esta estructura:
 {
   "sections": [
-    { "key": "presentacion", "title": "1. Presentación", "content": "...", "unconfirmed": false },
-    { "key": "entendimiento", "title": "2. Entendimiento del objeto", "content": "...", "unconfirmed": false },
-    { "key": "propuesta_tecnica", "title": "3. Propuesta técnica", "content": "...", "unconfirmed": false },
-    { "key": "metodologia", "title": "4. Metodología y cronograma tentativo", "content": "...", "unconfirmed": false },
-    { "key": "estructura_economica", "title": "5. Estructura económica (plantilla)", "content": "...", "unconfirmed": true },
-    { "key": "anexos", "title": "6. Anexos requeridos", "content": "...", "unconfirmed": false }
+    { "key": "resumen_ejecutivo", "title": "1. Resumen ejecutivo", "content": "...", "unconfirmed": false },
+    { "key": "entendimiento", "title": "2. Entendimiento del objeto y contexto", "content": "...", "unconfirmed": false },
+    { "key": "solucion", "title": "3. Solución propuesta", "content": "...", "unconfirmed": false },
+    { "key": "metodologia", "title": "4. Metodología y plan de trabajo", "content": "...", "unconfirmed": false },
+    { "key": "cronograma", "title": "5. Cronograma tentativo", "content": "...", "unconfirmed": false },
+    { "key": "equipo", "title": "6. Equipo y organización", "content": "...", "unconfirmed": false },
+    { "key": "indicadores", "title": "7. Indicadores de éxito", "content": "...", "unconfirmed": false },
+    { "key": "gestion_riesgos", "title": "8. Gestión de riesgos", "content": "...", "unconfirmed": false },
+    { "key": "por_que_nosotros", "title": "9. Por qué esta empresa", "content": "...", "unconfirmed": false },
+    { "key": "estructura_economica", "title": "10. Estructura económica (plantilla)", "content": "...", "unconfirmed": true },
+    { "key": "anexos", "title": "11. Anexos y documentos de la oferta", "content": "...", "unconfirmed": false }
   ],
   "checklists": [
     { "group": "Documentos administrativos", "items": [ { "label": "...", "required": true } ] },
     { "group": "Antes de enviar", "items": [ { "label": "...", "required": true } ] }
   ]
-}`
+}
+
+ESPECIFICACIÓN DE CADA SECCIÓN:
+${DEEP_SECTION_SPEC}`
 
       const reqBlock = requirements.map((r) => `- [${r.status}] ${r.description} (evidencia: ${r.evidence || 'ninguna registrada'})`).join('\n')
 
@@ -265,17 +294,18 @@ Devuelve EXCLUSIVAMENTE JSON válido:
 ID: ${rec.id}
 Entidad: ${rec.entity}
 Objeto: ${rec.objectName}
-Descripción: ${rec.description || '(no publicada)'}
+Descripción publicada: ${rec.description || '(no publicada — deduce la necesidad desde el objeto)'}
 Presupuesto de referencia: ${rec.basePrice ? `$${rec.basePrice} COP` : 'no publicado'} (NO usarlo como precio de la propuesta)
-Duración: ${rec.duration || 'n/d'} ${rec.durationUnit || ''}
+Duración publicada: ${rec.duration || 'n/d'} ${rec.durationUnit || ''}
 Lugar: ${rec.city || 'n/d'} / ${rec.department || 'n/d'}
+Modalidad: ${rec.modality || 'n/d'} | Tipo de contrato: ${rec.contractType || 'n/d'}
 
 ${companyBlock(bundle)}
 
-MATRIZ DE REQUISITOS DEL ANÁLISIS:
+MATRIZ DE REQUISITOS DEL ANÁLISIS (úsala para alinear la propuesta y armar los anexos):
 ${reqBlock}
 
-Redacta el borrador de la propuesta técnica siguiendo la estructura JSON indicada.`
+Diseña el proyecto completo siguiendo la estructura JSON indicada.`
 
       const res = await zai.chat.completions.create({
         messages: [
@@ -283,7 +313,7 @@ Redacta el borrador de la propuesta técnica siguiendo la estructura JSON indica
           { role: 'user', content: user },
         ],
         thinking: { type: 'disabled' },
-        temperature: 0.3,
+        temperature: 0.4,
       })
 
       const content: string = res?.choices?.[0]?.message?.content ?? ''
@@ -311,11 +341,112 @@ Redacta el borrador de la propuesta técnica siguiendo la estructura JSON indica
           sections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
         return { sections, checklists, unconfirmedCount, engine: 'IA' }
       }
-    } catch {
+    } catch (err) {
+      console.error('[ai] generateProposal: motor IA falló, cae a plantilla —', err instanceof Error ? err.message : err)
       // cae a plantilla
     }
   }
   return templateProposal(rec, bundle, requirements)
+}
+
+// ─── MÓDULO G+: refinamiento conversacional de la propuesta ──────
+
+export interface RefinementResult {
+  sections: ProposalSection[]
+  changeSummary: string
+  sectionsAffected: string[]
+  engine: 'IA'
+}
+
+/** Regenera la propuesta aplicando una instrucción del usuario, conservando la regla anti-invención. Devuelve null si no hay motor IA. */
+export async function refineProposal(
+  rec: RawSecopRecord,
+  bundle: CompanyBundle,
+  requirements: RequirementItem[],
+  currentSections: ProposalSection[],
+  instruction: string,
+  history: { role: string; content: string }[],
+): Promise<RefinementResult | null> {
+  const zai = await getZai()
+  if (!zai) return null
+
+  try {
+    const system = `Eres el mismo AGENTE PROYECTISTA que redactó una propuesta para un proceso SECOP II. Ahora trabajas en el refinamiento conversacional con el usuario.
+
+REGLAS ABSOLUTAS — NO NEGOCIABLES:
+1. NUNCA inventes experiencia, contratos, certificaciones, capacidades, precios, cifras económicas, firmas, documentos, nombres de personas ni declaraciones.
+2. Usa ÚNICAMENTE la información registrada de la empresa. Si la instrucción pide un dato que no está registrado, escribe [POR CONFIRMAR: qué dato falta].
+3. Aplica la instrucción del usuario con precisión; el resto del proyecto debe quedar consistente con el cambio (si cambias la metodología, ajusta cronograma/indicadores si aplica).
+4. NO degrades otras secciones: conserva su nivel de detalle y su evidencia.
+5. Devuelve SIEMPRE el proyecto completo (las 11 secciones), no solo las tocadas.
+
+Devuelve EXCLUSIVAMENTE JSON válido:
+{
+  "sections": [ { "key": "...", "title": "...", "content": "...", "unconfirmed": false } ],
+  "changeSummary": "resumen en 1-3 frases de qué cambió y por qué",
+  "sectionsAffected": ["metodologia", "cronograma"]
+}`
+
+    const current = currentSections
+      .map((s) => `### ${s.title} (key: ${s.key}${s.unconfirmed ? ' — contiene [POR CONFIRMAR]' : ''})\n${s.content}`)
+      .join('\n\n')
+
+    const historyBlock = history.length
+      ? history.map((m) => `${m.role === 'USUARIO' ? 'Usuario' : 'Agente'}: ${m.content}`).join('\n')
+      : '(sin conversación previa)'
+
+    const reqBlock = requirements.map((r) => `- [${r.status}] ${r.description}`).join('\n')
+
+    const user = `PROCESO SECOP II:
+ID: ${rec.id} | Entidad: ${rec.entity}
+Objeto: ${rec.objectName}
+Duración: ${rec.duration || 'n/d'} ${rec.durationUnit || ''} | Lugar: ${rec.city || 'n/d'} / ${rec.department || 'n/d'}
+
+${companyBlock(bundle)}
+
+MATRIZ DE REQUISITOS:
+${reqBlock}
+
+CONVERSACIÓN PREVIA:
+${historyBlock}
+
+BORRADOR ACTUAL COMPLETO:
+${current}
+
+INSTRUCCIÓN NUEVA DEL USUARIO:
+"""${instruction}"""
+
+Aplica la instrucción y devuelve el JSON del proyecto completo actualizado.`
+
+    const res = await zai.chat.completions.create({
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      thinking: { type: 'disabled' },
+      temperature: 0.35,
+    })
+
+    const content: string = res?.choices?.[0]?.message?.content ?? ''
+    const parsed = extractJson(content)
+    if (!parsed || !Array.isArray(parsed.sections) || parsed.sections.length === 0) return null
+
+    const sections: ProposalSection[] = (parsed.sections as Record<string, unknown>[]).map((s, i) => ({
+      key: String(s.key || `seccion_${i + 1}`),
+      title: String(s.title || `Sección ${i + 1}`),
+      content: String(s.content || ''),
+      unconfirmed: Boolean(s.unconfirmed) || String(s.content || '').includes('[POR CONFIRMAR'),
+    }))
+
+    return {
+      sections,
+      changeSummary: String(parsed.changeSummary || 'Propuesta actualizada según la instrucción.').slice(0, 800),
+      sectionsAffected: Array.isArray(parsed.sectionsAffected) ? parsed.sectionsAffected.map(String).slice(0, 12) : [],
+      engine: 'IA',
+    }
+  } catch {
+    return null
+  }
 }
 
 /** Plantilla de respaldo — estructura completa sin inventar datos. */

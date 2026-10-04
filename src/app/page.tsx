@@ -7,6 +7,7 @@ import { OpportunitiesView } from '@/components/app/opportunities'
 import { OpportunityDetailView } from '@/components/app/detail'
 import { CompanyView } from '@/components/app/company'
 import { AlertsView } from '@/components/app/alerts'
+import { IntegrationsView } from '@/components/app/integrations'
 import {
   type OpportunityData,
   type CompanyProfile,
@@ -23,10 +24,10 @@ interface DashboardPayload {
   alerts: NotificationData[]
   lastSync: { at: string; detail: string } | null
 }
-import { Radar, LayoutDashboard, Inbox, Building2, Bell, ShieldCheck } from 'lucide-react'
+import { Radar, LayoutDashboard, Inbox, Building2, Bell, ShieldCheck, Plug } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
-type View = 'dashboard' | 'oportunidades' | 'detalle' | 'empresa' | 'alertas'
+type View = 'dashboard' | 'oportunidades' | 'detalle' | 'empresa' | 'alertas' | 'integraciones'
 
 export default function Home() {
   const { toast } = useToast()
@@ -48,6 +49,7 @@ export default function Home() {
   const [syncing, setSyncing] = useState(false)
   const [analyzingId, setAnalyzingId] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
+  const [refining, setRefining] = useState(false)
 
   // ─── Cargadores ─────────────────────────────────────────────
   const loadCompany = useCallback(async () => {
@@ -238,6 +240,28 @@ export default function Home() {
     }
   }
 
+  const handleRefineProposal = async (proposalId: string, instruction: string) => {
+    setRefining(true)
+    try {
+      const res = await fetch(`/api/proposals/${proposalId}/refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instruction }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Error')
+      toast({
+        title: `Proyecto actualizado — versión ${data.proposal.version}`,
+        description: data.changeSummary || 'El agente aplicó tu instrucción.',
+      })
+      if (selectedId) loadDetail(selectedId)
+    } catch (e) {
+      toast({ title: 'No se pudo refinar la propuesta', description: e instanceof Error ? e.message : undefined, variant: 'destructive' })
+    } finally {
+      setRefining(false)
+    }
+  }
+
   const handleMarkAllRead = async () => {
     await fetch('/api/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'markAllRead' }) })
     loadAlerts()
@@ -254,6 +278,7 @@ export default function Home() {
     { key: 'oportunidades', label: 'Oportunidades', icon: Inbox, badge: opportunities.filter((o) => o.status !== 'DESCARTADA').length },
     { key: 'empresa', label: 'Mi Empresa', icon: Building2 },
     { key: 'alertas', label: 'Alertas', icon: Bell, badge: unread },
+    { key: 'integraciones', label: 'Integraciones', icon: Plug },
   ]
 
   return (
@@ -322,8 +347,10 @@ export default function Home() {
             onApprovePrep={handleApprovePrep}
             onGenerateProposal={handleGenerateProposal}
             onApproveProposal={handleApproveProposal}
+            onRefineProposal={handleRefineProposal}
             analyzing={analyzingId === selectedId}
             generating={generating}
+            refining={refining}
           />
         )}
         {view === 'empresa' && <CompanyView company={company} loading={loadingCompany} onSaved={() => { loadCompany(); refreshAll() }} />}
@@ -337,6 +364,7 @@ export default function Home() {
             onMarkRead={handleMarkRead}
           />
         )}
+        {view === 'integraciones' && <IntegrationsView />}
       </main>
 
       {/* Pie pegado al fondo */}

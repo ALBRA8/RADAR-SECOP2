@@ -68,6 +68,16 @@ export interface ApprovalData {
   createdAt: string
 }
 
+export interface ProposalMessageData {
+  id: string
+  role: 'USUARIO' | 'AGENTE'
+  content: string
+  versionBefore?: number | null
+  versionAfter?: number | null
+  sectionsAffected?: string | null
+  createdAt: string
+}
+
 export interface ProposalData {
   id: string
   version: number
@@ -97,6 +107,7 @@ export interface OpportunityData {
   process: ProcessData
   requirements?: RequirementData[]
   proposals?: ProposalData[]
+  messages?: ProposalMessageData[]
 }
 
 export interface CompanyProfile {

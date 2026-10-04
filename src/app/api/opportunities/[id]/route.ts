@@ -12,6 +12,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         process: true,
         requirements: { orderBy: { code: 'asc' } },
         proposals: { orderBy: { version: 'desc' }, include: { approvals: { orderBy: { createdAt: 'desc' } } } },
+        proposalMessages: { orderBy: { createdAt: 'asc' }, take: 100 },
       },
     })
     if (!opportunity) throw new Error('Oportunidad no encontrada')
@@ -21,6 +22,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         reasons: parseJsonArray(opportunity.reasonsJson),
         missingDocs: parseJsonArray(opportunity.missingDocsJson),
         risks: parseJsonArray(opportunity.risksJson),
+        messages: opportunity.proposalMessages,
       },
     }
   })

@@ -141,6 +141,7 @@ model Opportunity {
   requirements Requirement[]
   proposals    Proposal[]
   notifications Notification[]
+  proposalMessages ProposalMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -183,6 +184,21 @@ model Proposal {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Chat de refinamiento agéntico de la propuesta (Módulo G — Modo Agente Proyectista)
+model ProposalMessage {
+  id            String      @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  role             String // USUARIO | AGENTE
+  content          String // instrucción del usuario o resumen del cambio del agente
+  versionBefore    Int?
+  versionAfter     Int?
+  sectionsAffected String @default("[]") // JSON: claves de secciones tocadas
+
+  createdAt DateTime @default(now())
 }
 
 model Approval {
