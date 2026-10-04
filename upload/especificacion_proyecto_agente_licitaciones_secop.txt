@@ -1,0 +1,346 @@
+ESPECIFICACIÓN FUNCIONAL Y PLAN DE CONSTRUCCIÓN
+AGENTE INTELIGENTE PARA DETECCIÓN Y PREPARACIÓN DE OPORTUNIDADES DE CONTRATACIÓN — SECOP II
+
+VERSIÓN 1.0
+
+1. VISIÓN DEL PROYECTO
+
+Construir una plataforma/agente de inteligencia artificial que monitoree oportunidades de contratación publicadas en SECOP II, identifique automáticamente aquellas que podrían ser atendidas por una empresa determinada, las filtre según capacidad y criterios configurables, analice sus documentos y requisitos, prepare una propuesta de respuesta y entregue al usuario un paquete listo para revisión y eventual presentación.
+
+La plataforma NO debe asumir que toda oportunidad encontrada es viable. Debe justificar por qué una oportunidad coincide con el perfil de la empresa y señalar claramente los requisitos que se cumplen, los que no se cumplen y los que requieren validación humana.
+
+La presentación final de una oferta debe permanecer bajo aprobación humana hasta que se haya verificado técnica, legal y operativamente la posibilidad de automatizarla dentro de SECOP II.
+
+2. PROBLEMA QUE RESUELVE
+
+Una empresa pierde tiempo revisando manualmente numerosos procesos de contratación. Muchos procesos están fuera de su rango económico, no corresponden a sus productos/servicios, exigen experiencia que no tiene, requieren documentos que no posee o ya tienen vencida la fecha de presentación.
+
+El sistema debe convertir ese universo de procesos en un flujo de oportunidades accionables:
+
+SECOP II → descubrimiento → filtrado → análisis documental → evaluación de compatibilidad → selección de oportunidades → generación de propuesta → revisión humana → presentación.
+
+3. USUARIO OBJETIVO
+
+El sistema debe permitir configurar una o varias empresas.
+
+Para cada empresa se almacenará, como mínimo:
+- Nombre y datos básicos.
+- Productos y servicios.
+- Categorías y palabras clave.
+- Rango económico mínimo y máximo.
+- Ciudades/departamentos o cobertura geográfica.
+- Tipos de entidades objetivo.
+- Modalidades de contratación de interés.
+- Capacidad operativa.
+- Experiencia y contratos anteriores.
+- Certificaciones y habilitaciones.
+- Documentos corporativos.
+- Información financiera que sea necesaria para evaluar requisitos.
+- Personas responsables de aprobar ofertas.
+
+4. OBJETIVO DEL MVP
+
+El primer producto funcional debe demostrar que el sistema puede:
+
+1) consultar programáticamente las fuentes de datos de SECOP II que correspondan;
+2) detectar procesos nuevos o vigentes;
+3) aplicar filtros configurables;
+4) identificar oportunidades relacionadas con la empresa;
+5) analizar los documentos disponibles de cada proceso;
+6) construir una matriz de requisitos;
+7) identificar documentos faltantes y riesgos;
+8) producir una lista priorizada de oportunidades, inicialmente las 5 más relevantes;
+9) generar un borrador de propuesta para revisión humana.
+
+La automatización del envío de ofertas NO es requisito del primer MVP.
+
+5. ARQUITECTURA FUNCIONAL
+
+MÓDULO A — INGESTA SECOP
+Responsable de consultar los datos disponibles de SECOP II y mantener una base interna de procesos.
+
+Debe guardar:
+- ID del proceso.
+- Entidad.
+- Nombre/objeto.
+- Descripción.
+- Modalidad.
+- Estado/fase.
+- Valor/presupuesto cuando esté disponible.
+- Fechas relevantes.
+- Ubicación.
+- Enlaces e identificadores de documentos.
+- Fecha de última actualización.
+- Fuente del dato.
+
+Debe evitar duplicados y detectar modificaciones de procesos ya almacenados.
+
+MÓDULO B — FILTRO DETERMINÍSTICO
+Aplicar primero reglas simples y verificables, antes de utilizar IA.
+
+Ejemplos:
+- valor entre $5.000.000 y $20.000.000;
+- proceso vigente;
+- fecha límite futura;
+- ubicación permitida;
+- modalidad permitida;
+- palabras/categorías relacionadas;
+- exclusión de procesos que claramente superen la capacidad de la empresa.
+
+Los parámetros deben ser configurables, no programados de forma rígida.
+
+MÓDULO C — PERFIL DE EMPRESA
+Convertir la información de la empresa en una estructura que pueda ser comparada contra procesos.
+
+Debe distinguir entre:
+- capacidades comprobadas;
+- experiencia;
+- documentos disponibles;
+- información pendiente de confirmar.
+
+Nunca se debe inferir que una empresa posee una certificación, experiencia o documento que no esté registrado.
+
+MÓDULO D — ANÁLISIS INTELIGENTE
+Para cada oportunidad candidata, el agente debe leer y analizar los documentos disponibles.
+
+Debe extraer:
+- objeto;
+- alcance;
+- presupuesto;
+- plazo;
+- lugar de ejecución;
+- requisitos habilitantes;
+- experiencia requerida;
+- capacidad financiera;
+- requisitos técnicos;
+- garantías;
+- documentos exigidos;
+- cronograma;
+- criterios de evaluación;
+- condiciones de entrega;
+- obligaciones relevantes.
+
+Debe producir una matriz:
+
+REQUISITO | ESTADO | EVIDENCIA | ACCIÓN
+Cumple / No cumple / Pendiente / Requiere revisión.
+
+MÓDULO E — MOTOR DE COMPATIBILIDAD
+No usar solamente palabras clave.
+
+La compatibilidad debe considerar, al menos:
+- relación entre objeto y productos/servicios;
+- valor;
+- ubicación;
+- experiencia;
+- capacidad;
+- requisitos habilitantes;
+- documentación;
+- fechas;
+- modalidad.
+
+El resultado debe ser explicable. El sistema debe mostrar las razones de la compatibilidad y no únicamente un porcentaje.
+
+MÓDULO F — RANKING DE OPORTUNIDADES
+Entregar inicialmente las 5 oportunidades más relevantes según criterios configurables.
+
+Cada oportunidad debe mostrar:
+- ID SECOP;
+- entidad;
+- objeto;
+- valor;
+- fecha límite;
+- ubicación;
+- modalidad;
+- compatibilidad;
+- requisitos críticos;
+- documentos faltantes;
+- riesgos;
+- siguiente acción;
+- enlace al proceso.
+
+El orden debe ser una priorización configurable del usuario, no una recomendación política.
+
+MÓDULO G — GENERACIÓN DE PROPUESTA
+Cuando una oportunidad sea aprobada para preparación, el agente debe:
+
+1) analizar todos los requisitos;
+2) seleccionar información y documentos autorizados de la empresa;
+3) generar borrador técnico;
+4) preparar estructura económica cuando corresponda;
+5) preparar anexos;
+6) adaptar la solución al objeto del proceso;
+7) generar checklist de presentación.
+
+Toda información no confirmada debe quedar marcada.
+
+REGLA CRÍTICA: el agente nunca debe inventar experiencia, contratos, certificaciones, capacidades, precios, firmas, documentos o declaraciones.
+
+MÓDULO H — REVISIÓN HUMANA
+Antes de cualquier presentación:
+- el usuario revisa la oportunidad;
+- revisa la matriz de requisitos;
+- revisa documentos;
+- revisa propuesta;
+- confirma precio y condiciones;
+- aprueba explícitamente.
+
+Debe existir trazabilidad de la aprobación.
+
+MÓDULO I — PRESENTACIÓN EN SECOP II
+Esta fase se implementará después de investigar técnicamente las funciones disponibles, autenticación, firma, permisos y condiciones de SECOP II.
+
+El sistema debe determinar qué puede automatizarse y qué debe realizar el usuario.
+
+No guardar contraseñas de SECOP II en texto plano.
+No automatizar acciones de envío sin aprobación explícita.
+Usar mecanismos de autenticación y seguridad apropiados.
+
+6. FLUJO PRINCIPAL DEL USUARIO
+
+1. Crear empresa.
+2. Configurar productos/servicios.
+3. Definir rango económico.
+4. Cargar experiencia y documentos.
+5. Activar monitoreo.
+6. El sistema consulta SECOP.
+7. Filtra procesos.
+8. Analiza candidatos.
+9. Genera oportunidades compatibles.
+10. Presenta las 5 prioritarias.
+11. Usuario selecciona una.
+12. Agente genera matriz de cumplimiento.
+13. Agente prepara borrador.
+14. Usuario revisa y corrige.
+15. Usuario aprueba.
+16. Sistema prepara el paquete final.
+17. Presentación en SECOP: manual o automatizada, dependiendo de lo que se determine en la fase correspondiente.
+
+7. PANEL PRINCIPAL
+
+El dashboard debe mostrar:
+- nuevas oportunidades;
+- oportunidades próximas a vencer;
+- oportunidades en análisis;
+- oportunidades aprobadas;
+- propuestas en preparación;
+- propuestas presentadas;
+- procesos descartados y motivo;
+- alertas de documentos faltantes.
+
+Una oportunidad debe poder abrirse para ver el expediente completo.
+
+8. ALERTAS
+
+Enviar alertas cuando:
+- aparezca una oportunidad altamente compatible;
+- se aproxime una fecha límite;
+- cambie un proceso;
+- se agregue/modifique un documento;
+- falte información de la empresa;
+- un requisito crítico no esté cubierto.
+
+9. BASE DE DATOS INTERNA
+
+Entidades mínimas:
+- Empresa
+- Usuario
+- Producto/Servicio
+- Experiencia
+- Documento
+- Proceso SECOP
+- Documento SECOP
+- Requisito
+- Evaluación de compatibilidad
+- Oportunidad
+- Propuesta
+- Versión de propuesta
+- Aprobación
+- Evento/Auditoría
+- Notificación
+
+10. SEGURIDAD Y TRAZABILIDAD
+
+El sistema manejará información empresarial sensible.
+
+Requisitos:
+- control de acceso por usuario/rol;
+- cifrado de información sensible;
+- almacenamiento seguro de documentos;
+- registro de auditoría;
+- control de versiones;
+- separación por empresa;
+- backups;
+- gestión segura de credenciales;
+- no exponer documentos de una empresa a otra.
+
+11. FASES DE CONSTRUCCIÓN
+
+FASE 1 — INVESTIGACIÓN TÉCNICA
+- Confirmar fuentes y mecanismos oficiales de datos SECOP.
+- Identificar campos.
+- Probar consultas.
+- Determinar acceso a documentos.
+- Determinar frecuencia de actualización.
+ENTREGABLE: documento técnico + prueba de conexión.
+
+FASE 2 — MVP DE DESCUBRIMIENTO
+- Ingesta.
+- Base de datos.
+- Filtros.
+- Dashboard básico.
+- Alertas básicas.
+ENTREGABLE: sistema que encuentre oportunidades.
+
+FASE 3 — INTELIGENCIA DE COMPATIBILIDAD
+- Perfil de empresa.
+- Lectura documental.
+- Extracción de requisitos.
+- Matriz de cumplimiento.
+- Priorización.
+ENTREGABLE: sistema que explique por qué una oportunidad es compatible.
+
+FASE 4 — GENERACIÓN DE PROPUESTAS
+- Plantillas.
+- Generación técnica.
+- Anexos.
+- Checklist.
+- Control de versiones.
+ENTREGABLE: borrador completo revisable.
+
+FASE 5 — CONTROL Y APROBACIÓN
+- Flujo de aprobación.
+- Auditoría.
+- Permisos.
+- Alertas.
+ENTREGABLE: proceso seguro de revisión.
+
+FASE 6 — INTEGRACIÓN DE PRESENTACIÓN
+- Investigar capacidades reales de SECOP II.
+- Diseñar autenticación.
+- Probar en entorno permitido.
+- Automatizar únicamente lo viable.
+ENTREGABLE: flujo de presentación, si técnicamente y normativamente resulta viable.
+
+12. CRITERIOS DE ÉXITO DEL MVP
+
+El MVP será considerado funcional si:
+- obtiene procesos de forma programática;
+- no duplica procesos;
+- filtra correctamente por criterios configurados;
+- identifica oportunidades relacionadas con el perfil;
+- analiza documentos disponibles;
+- genera una matriz de cumplimiento;
+- explica por qué una oportunidad fue seleccionada;
+- muestra fechas y requisitos críticos;
+- genera un borrador de propuesta;
+- exige aprobación humana antes de cualquier envío.
+
+13. PRINCIPIOS DEL PRODUCTO
+
+- Primero datos verificables; después IA.
+- Automatizar tareas repetitivas, no decisiones empresariales críticas.
+- Todo resultado importante debe ser trazable a una fuente.
+- No inventar información.
+- Mantener al humano en el circuito antes de comprometer a la empresa.
+- Diseñar el sistema para crecer desde procesos de $5–20 millones hacia rangos superiores sin rehacer la arquitectura.

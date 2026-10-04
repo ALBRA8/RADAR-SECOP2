@@ -1,0 +1,221 @@
+// Schema del Agente Inteligente SECOP II
+// Entidades según especificación funcional v1.0 (sección 9)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── EMPRESA Y PERFIL (MÓDULO C) ─────────────────────────────
+
+model Company {
+  id          String   @id @default(cuid())
+  name        String
+  nit         String?
+  description String?
+  city        String?
+  department  String?
+  // Parámetros configurables de filtrado (MÓDULO B) — no rígidos
+  minBudget           Float  @default(5000000)
+  maxBudget           Float  @default(20000000)
+  departmentsAllowed  String @default("[]") // JSON: cobertura; "[]" = nacional
+  modalitiesAllowed   String @default("[]") // JSON: modalidades de interés; "[]" = todas
+  contractTypesAllowed String @default("[]") // JSON: tipos de contrato de interés
+  phasesAllowed       String @default("[\"Presentación de oferta\",\"Selección\"]")
+  requireKeywordHit   Boolean @default(false) // exigir coincidencia de palabras clave para NO descartar
+  capacity            String? // capacidad operativa
+  approverName        String? // responsable de aprobar ofertas (MÓDULO H)
+
+  products     ProductService[]
+  experiences  ExperienceItem[]
+  documents    CorpDocument[]
+  opportunities Opportunity[]
+  proposals    Proposal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProductService {
+  id          String  @id @default(cuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  category    String?
+  keywords    String  @default("[]") // JSON: palabras clave adicionales
+
+  createdAt DateTime @default(now())
+}
+
+model ExperienceItem {
+  id          String  @id @default(cuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title       String
+  entity      String?
+  year        Int?
+  value       Float?
+  description String?
+
+  createdAt DateTime @default(now())
+}
+
+model CorpDocument {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  docType   String?
+  status    String  @default("DISPONIBLE") // DISPONIBLE | PENDIENTE | VENCIDO
+  notes     String?
+
+  createdAt DateTime @default(now())
+}
+
+// ─── INGESTA SECOP (MÓDULO A) ────────────────────────────────
+
+model SecopProcess {
+  id            String  @id // id_del_proceso de SECOP II
+  entity        String
+  nit           String?
+  department    String?
+  city          String?
+  entityOrder   String? // ordenentidad: Nacional / Territorial
+  reference     String?
+  portfolioId   String?
+  objectName    String // nombre del procedimiento
+  description   String?
+  phase         String?
+  state         String? // estado del procedimiento
+  openState     String?
+  basePrice     Float?
+  modality      String?
+  justification String?
+  contractType  String?
+  subType       String?
+  duration      String?
+  durationUnit  String?
+  unitCity      String?
+  unitName      String?
+  categoryCode  String?
+  publishDate   DateTime?
+  lastPubDate   DateTime?
+  receptionDate DateTime? // fecha de recepción de respuestas (aprox. cierre)
+  openRespDate  DateTime?
+  awarded       String?
+  url           String?
+  source        String  @default("datos.gov.co/p6dx-8zbt")
+  contentHash   String
+  rawJson       String?
+
+  opportunities Opportunity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── OPORTUNIDADES Y COMPATIBILIDAD (MÓDULOS E y F) ──────────
+
+model Opportunity {
+  id          String @id @default(cuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  processId   String
+  process     SecopProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  status       String @default("NUEVA") // NUEVA | EN_ANALISIS | COMPATIBLE | APROBADA_PREPARACION | DESCARTADA
+  score        Float  @default(0)
+  reasonsJson  String @default("[]") // JSON: evaluación de compatibilidad explicable por dimensión
+  missingDocsJson String @default("[]")
+  risksJson    String @default("[]")
+  nextAction   String?
+  analysisSummary String?
+  discardReason String?
+  rank         Int? // posición en el ranking por relevancia
+
+  requirements Requirement[]
+  proposals    Proposal[]
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, processId])
+}
+
+model Requirement {
+  id             String @id @default(cuid())
+  opportunityId  String
+  opportunity    Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  code           String
+  description    String
+  status         String // CUMPLE | NO_CUMPLE | PENDIENTE | REQUIERE_REVISION
+  evidence       String?
+  action         String?
+  source         String @default("IA") // IA | REGLA
+
+  createdAt DateTime @default(now())
+}
+
+// ─── PROPUESTAS Y APROBACIÓN (MÓDULOS G y H) ─────────────────
+
+model Proposal {
+  id            String @id @default(cuid())
+  companyId     String
+  company       Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  version          Int    @default(1)
+  status           String @default("BORRADOR") // BORRADOR | APROBADA
+  sectionsJson     String @default("[]") // JSON: secciones del borrador
+  checklistsJson   String @default("[]") // JSON: checklist de presentación
+  unconfirmedCount Int    @default(0)
+  approvedBy       String?
+  approvedAt       DateTime?
+
+  approvals Approval[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Approval {
+  id        String   @id @default(cuid())
+  proposalId String
+  proposal  Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  decision  String // APROBADA | RECHAZADA
+  approver  String
+  notes     String?
+
+  createdAt DateTime @default(now())
+}
+
+// ─── AUDITORÍA Y NOTIFICACIONES (SECCIONES 8 y 10) ───────────
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  action     String
+  entityType String?
+  entityId   String?
+  detail     String?
+
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id            String  @id @default(cuid())
+  type          String // NUEVA_OPORTUNIDAD | ALTA_COMPATIBILIDAD | DOCUMENTO_FALTANTE | REQUISITO_CRITICO | PROCESO_MODIFICADO | SISTEMA
+  title         String
+  message       String
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  read          Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
