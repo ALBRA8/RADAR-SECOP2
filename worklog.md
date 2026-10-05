@@ -188,3 +188,21 @@ Work Log:
 Stage Summary:
 - Proyecto reparado y endurecido post-auditoría: contrato de API correcto (4xx reales), Marco Lógico a prueba de corrupción y de omisión del modelo, canales con límites/seguridad/trazabilidad, frontend sin fugas ni crashes y conforme a la regla de color, TypeScript de build limpio.
 - Deuda documentada aceptada (bajas): export GET-only, alias id en MCP, rawJson en listado, dedup de webhook síncrono (mitigado: polling es el modo recomendado).
+
+---
+Task ID: 9
+Agent: Super Z (agente principal)
+Task: Subir el proyecto al repositorio GitHub https://github.com/ALBRA8/RADAR-SECOP2
+
+Work Log:
+- Verificado el estado del repo local: rama main, sin remote configurado, 47 archivos pendientes (todo el trabajo de Tasks 4-8 sin commitear).
+- Escaneo de seguridad pre-push: sin secretos hardcodeados en código (rg sobre *.ts/*.py), ChannelConfig con 0 filas (sin tokens de bots en BD), .env fuera del tracking (gitignore .env*, solo contiene DATABASE_URL local), dev.log ignorado.
+- Eliminados 2 scripts de diagnóstico temporales (inspect_db_secrets.js, inspect_channels.js).
+- Commit único del trabajo acumulado: cc72510 "feat: Marco Lógico + Canales Telegram/WhatsApp + Multimodal + MCP + Auditoría multiagente" con autor ALBRA8 <ALBRA8@users.noreply.github.com>.
+- Remote agregado: origin = https://github.com/ALBRA8/RADAR-SECOP2.git
+- git ls-remote sin error y sin refs → el repo remoto existe, es público y está VACÍO (push directo sin conflictos).
+- Push de prueba (GIT_TERMINAL_PROMPT=0) → falla como se esperaba: "could not read Username" — el entorno no tiene PAT, gh CLI, ni llaves SSH. GitHub no admite push anónimo.
+
+Stage Summary:
+- TODO listo para publicar: commit cc72510 en main (188+ archivos, incluye db/custom.db demo con 11 oportunidades reales), remote origin configurado, repo remoto vacío verificado.
+- Bloqueo único: se necesita un Personal Access Token de GitHub (scope repo) que el usuario debe generar en github.com/settings/tokens. Tan pronto lo pegue: git push https://<TOKEN>@github.com/ALBRA8/RADAR-SECOP2.git main, y se recomienda revocar el token después.
