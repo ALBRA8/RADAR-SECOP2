@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -14,12 +14,12 @@ import { StatusBadge, ScoreBadge, DimIcon, ReqStatusBadge, UnconfirmedWarn, Spin
 import {
   fmtCOP, fmtDate, fmtDateTime, daysUntil,
   DIM_COLORS,
-  type OpportunityData, type ProposalData, type ProposalMessageData,
+  type OpportunityData, type ProposalData, type ProposalMessageData, type MarcoLogicoData,
 } from './client-types'
 import {
   ArrowLeft, ExternalLink, Landmark, Calendar, Tag, Clock,
   FilePlus2, Ban, CheckCircle2, Building2, UserCheck, FileCheck2, ShieldAlert, FileText,
-  MessagesSquare, Send, Bot, User,
+  MessagesSquare, Send, Bot, User, Network, Download,
 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
@@ -379,11 +379,26 @@ export function OpportunityDetailView({
               <Textarea id="notas" value={approverNotes} onChange={(e) => setApproverNotes(e.target.value)} rows={2} placeholder="Condiciones confirmadas, precio aprobado, etc." />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setApproveOpen(null)}>Cancelar</Button>
-            <Button onClick={submitApproval} className="bg-emerald-600 hover:bg-emerald-700">
-              <UserCheck className="w-4 h-4 mr-1.5" aria-hidden /> Aprobar propuesta
+          <DialogFooter className="sm:justify-between">
+            <Button
+              variant="outline"
+              className="border-rose-300 text-rose-700 hover:bg-rose-50"
+              onClick={() => {
+                if (!approveOpen) return
+                onApproveProposal(approveOpen.id, 'RECHAZADA', approver.trim() || 'Responsable', approverNotes.trim() || 'Devuelta para ajustes')
+                setApproveOpen(null)
+                setApprover('')
+                setApproverNotes('')
+              }}
+            >
+              <Ban className="w-4 h-4 mr-1.5" aria-hidden /> Devolver para ajustes
             </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setApproveOpen(null)}>Cancelar</Button>
+              <Button onClick={submitApproval} className="bg-emerald-600 hover:bg-emerald-700">
+                <UserCheck className="w-4 h-4 mr-1.5" aria-hidden /> Aprobar propuesta
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -400,6 +415,95 @@ function InfoItem({ icon: Icon, label, value, strong }: { icon: typeof Landmark;
         <p className={`text-sm leading-snug ${strong ? 'font-semibold' : 'font-medium'} break-words`}>{value}</p>
       </div>
     </div>
+  )
+}
+
+/** Matriz de Marco Lógico: árbol de problemas → objetivos + tabla Fin/Propósito/Componentes/Actividades. */
+function MarcoLogicoCard({ marcoLogico }: { marcoLogico: MarcoLogicoData | null | undefined }) {
+  if (!marcoLogico) {
+    return (
+      <Card>
+        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <span className="rounded-lg bg-muted p-2 w-9 h-9 grid place-items-center shrink-0" aria-hidden>
+            <Network className="w-5 h-5 text-muted-foreground" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">Marco lógico aún no generado</p>
+            <p className="text-sm text-muted-foreground">
+              Muchos pliegos exigen marco lógico. Pídele al agente «Construye el marco lógico completo» en el chat de abajo y generará el árbol de problemas + la matriz por niveles.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+  const ml = marcoLogico
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Network className="w-5 h-5 text-teal-600" aria-hidden />
+          Matriz de Marco Lógico
+        </CardTitle>
+        <p className="text-sm text-muted-foreground mt-1">
+          Especialidad del agente: lógica de intervención Fin → Propósito → Componentes → Actividades, con indicadores verificables, medios y supuestos. Valídala contra el pliego antes de presentar.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Árbol de problemas → objetivos */}
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="rounded-lg border border-rose-200 bg-rose-50/60 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-rose-700 mb-1.5">Árbol de problemas</p>
+            <p className="text-sm"><strong>Problema central:</strong> {ml.problemaCentral || 'n/d'}</p>
+            {ml.causas.length > 0 && (
+              <p className="text-sm mt-1.5"><strong>Causas:</strong></p>
+            )}
+            <ul className="list-disc list-inside text-sm text-muted-foreground">
+              {ml.causas.map((c, i) => <li key={i}>{c}</li>)}
+            </ul>
+            {ml.efectos.length > 0 && (
+              <p className="text-sm mt-1.5"><strong>Efectos:</strong></p>
+            )}
+            <ul className="list-disc list-inside text-sm text-muted-foreground">
+              {ml.efectos.map((c, i) => <li key={i}>{c}</li>)}
+            </ul>
+          </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 mb-1.5">Árbol de objetivos (espejo)</p>
+            <p className="text-sm"><strong>Objetivo central:</strong> {ml.objetivoCentral || 'n/d'}</p>
+            <p className="text-sm text-muted-foreground mt-1.5">
+              Cada componente de la matriz responde a una causa; cada indicador verifica un objetivo.
+            </p>
+          </div>
+        </div>
+
+        {/* Matriz */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse min-w-[640px]">
+            <thead>
+              <tr className="border-b text-left text-xs text-muted-foreground uppercase tracking-wide">
+                <th scope="col" className="py-2 pr-3 font-medium w-32">Nivel</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Resumen narrativo</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Indicadores verificables</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Medios de verificación</th>
+                <th scope="col" className="py-2 font-medium">Supuestos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ml.filas.map((f, i) => (
+                <tr key={i} className="border-b last:border-0 align-top">
+                  <td className="py-3 pr-3 font-medium whitespace-nowrap">{f.nivel}</td>
+                  <td className="py-3 pr-3">{f.resumen || '—'}</td>
+                  <td className="py-3 pr-3 text-muted-foreground">{f.indicadores || '—'}</td>
+                  <td className="py-3 pr-3 text-muted-foreground">{f.mediosVerificacion || '—'}</td>
+                  <td className="py-3 text-muted-foreground">{f.supuestos || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -424,6 +528,12 @@ function ProposalPanel({
 }) {
   const { toast } = useToast()
   const [chatInput, setChatInput] = useState('')
+  const chatEndRef = useRef<HTMLDivElement | null>(null)
+
+  // Auto-scroll del chat al crecer la conversación
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [messages.length, refining])
 
   const sendInstruction = () => {
     const text = chatInput.trim()
@@ -436,6 +546,7 @@ function ProposalPanel({
   }
 
   const quickIdeas = [
+    'Construye el marco lógico completo con árbol de problemas y matriz por niveles',
     'Haz el cronograma más agresivo sin perder realismo',
     'Enfatiza la experiencia registrada más pertinente para el objeto',
     'Ajusta la metodología a una ejecución con entregables por quincena',
@@ -460,6 +571,11 @@ function ProposalPanel({
               <Button size="sm" variant="outline" onClick={onGenerate} disabled={generating} className="min-h-9">
                 <FilePlus2 className={`w-4 h-4 mr-1.5 ${generating ? 'animate-pulse' : ''}`} aria-hidden /> {generating ? 'Generando…' : 'Nueva versión'}
               </Button>
+              <Button size="sm" variant="outline" asChild className="min-h-9">
+                <a href={`/api/proposals/${proposal.id}/export`} download aria-label="Descargar propuesta en Word">
+                  <Download className="w-4 h-4 mr-1.5" aria-hidden /> Word
+                </a>
+              </Button>
               {proposal.status === 'BORRADOR' && (
                 <Button size="sm" onClick={onApprove} className="bg-emerald-600 hover:bg-emerald-700 min-h-9">
                   <UserCheck className="w-4 h-4 mr-1.5" aria-hidden /> Revisar y aprobar
@@ -481,6 +597,9 @@ function ProposalPanel({
           ))}
         </CardContent>
       </Card>
+
+      {/* Matriz de Marco Lógico (especialidad del agente) */}
+      <MarcoLogicoCard marcoLogico={proposal.marcoLogico} />
 
       {proposal.checklists.length > 0 && (
         <Card>
@@ -574,6 +693,7 @@ function ProposalPanel({
                   </div>
                 </div>
               )}
+              <div ref={chatEndRef} aria-hidden />
             </div>
 
             {!refining && messages.length === 0 && (

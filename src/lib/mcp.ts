@@ -6,9 +6,10 @@
 // Las acciones de escritura exigen el mismo flujo de aprobación humana que la UI.
 
 import { db } from '@/lib/db'
-import { analyzeOpportunity, generateProposal, refineProposal } from '@/lib/ai'
+import { analyzeOpportunity, generateProposal, refineProposal, safeParseMarcoLogico } from '@/lib/ai'
 import { runSync } from '@/lib/sync'
-import { parseJsonArray, type CompanyConfigData, type DocumentData, type ExperienceData, type ProductItemData } from '@/lib/types'
+import { analyzePliegoText } from '@/lib/media'
+import { parseJsonArray, type ProposalSection, type CompanyConfigData, type DocumentData, type ExperienceData, type ProductItemData } from '@/lib/types'
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18'
 export const MCP_SERVER_INFO = {
@@ -237,20 +238,10 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
         where: {
           AND: [
             { status: { not: 'DESCARTADA' } },
-            ...(query
-              ? {
-                  process: {
-                    OR: [
-                      { objectName: { contains: query } },
-                      { description: { contains: query } },
-                      { entity: { contains: query } },
-                    ],
-                  },
-                }
-              : {}),
+            ...(query ? [{ process: { OR: [{ objectName: { contains: query } }, { description: { contains: query } }, { entity: { contains: query } }] } }] : []),
             ...(minValue != null || maxValue != null
-              ? { process: { basePrice: { ...(minValue != null ? { gte: minValue } : {}), ...(maxValue != null ? { lte: maxValue } : {}) } } }
-              : {}),
+              ? [{ process: { basePrice: { ...(minValue != null ? { gte: minValue } : {}), ...(maxValue != null ? { lte: maxValue } : {}) } } }]
+              : []),
           ],
         },
         include: { process: true },
@@ -348,7 +339,7 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
 
   generate_proposal: {
     description:
-      'Genera una nueva versión del borrador de proyecto completo (Modo Agente Proyectista: 11 secciones — resumen ejecutivo, entendimiento, solución, metodología, cronograma, equipo, indicadores, riesgos, por qué nosotros, estructura económica y anexos). Exige que la oportunidad esté aprobada para preparación (aprobación humana previa).',
+      'Genera una nueva versión del borrador de proyecto completo (Modo Agente Proyectista: 12 secciones — resumen ejecutivo, entendimiento, solución, metodología, cronograma, equipo, indicadores, riesgos, por qué nosotros, estructura económica, anexos y MARCO LÓGICO con matriz estructurada). Exige que la oportunidad esté aprobada para preparación (aprobación humana previa).',
     inputSchema: {
       type: 'object',
       properties: { opportunityId: { type: 'string' } },
@@ -380,12 +371,13 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
           status: 'BORRADOR',
           sectionsJson: JSON.stringify(draft.sections),
           checklistsJson: JSON.stringify(draft.checklists),
+          logicFrameworkJson: draft.marcoLogico ? JSON.stringify(draft.marcoLogico) : null,
           unconfirmedCount: draft.unconfirmedCount,
         },
       })
 
       await db.auditEvent.create({
-        data: { action: 'GENERAR_PROPUESTA', entityType: 'Proposal', entityId: proposal.id, detail: `Versión ${version} generada vía MCP con motor ${draft.engine}. ${draft.unconfirmedCount} dato(s) marcado(s) por confirmar.` },
+        data: { action: 'GENERAR_PROPUESTA', entityType: 'Proposal', entityId: proposal.id, detail: `Versión ${version} generada vía MCP con motor ${draft.engine}. ${draft.unconfirmedCount} dato(s) marcado(s) por confirmar.${draft.marcoLogico ? ' Incluye marco lógico.' : ''}` },
       })
 
       return {
@@ -394,6 +386,7 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
         engine: draft.engine,
         marcadores_por_confirmar: draft.unconfirmedCount,
         secciones: draft.sections,
+        marco_logico: draft.marcoLogico,
         checklist: draft.checklists,
         advertencia: 'Los precios NO los define el agente: la estructura económica es plantilla. La presentación en SECOP es manual y exige aprobación humana.',
       }
@@ -436,9 +429,12 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
 
       const opp = proposal.opportunity
       const history = await db.proposalMessage.findMany({ where: { opportunityId: opp.id }, orderBy: { createdAt: 'desc' }, take: 10 })
-      const result = await refineProposal(opp.process, buildBundle(opp.company), mapRequirements(opp.requirements), parseJsonArray(proposal.sectionsJson), instruction, history.reverse().map((m) => ({ role: m.role, content: m.content })))
+      const currentML = safeParseMarcoLogico(proposal.logicFrameworkJson)
+      const result = await refineProposal(opp.process, buildBundle(opp.company), mapRequirements(opp.requirements), parseJsonArray<ProposalSection>(proposal.sectionsJson), instruction, history.reverse().map((m) => ({ role: m.role, content: m.content })), currentML)
       if (!result) throw new Error('El motor IA no está disponible en este momento')
 
+      // Si la IA omitió el marco lógico, conserva el vigente (no se pierde la matriz)
+      const mlFinal = result.marcoLogico ?? currentML
       const version = proposal.version + 1
       const unconfirmedCount =
         result.sections.filter((s) => s.unconfirmed).length +
@@ -452,6 +448,7 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
           status: 'BORRADOR',
           sectionsJson: JSON.stringify(result.sections),
           checklistsJson: proposal.checklistsJson,
+          logicFrameworkJson: mlFinal ? JSON.stringify(mlFinal) : null,
           unconfirmedCount,
         },
       })
@@ -467,7 +464,7 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
         data: { action: 'REFINAR_PROPUESTA', entityType: 'Proposal', entityId: newProposal.id, detail: `Versión ${version} (desde v${proposal.version}) refinada vía MCP. Secciones: ${result.sectionsAffected.join(', ') || 'n/d'}.` },
       })
 
-      return { proposalId: newProposal.id, version, resumen_cambio: result.changeSummary, secciones_afectadas: result.sectionsAffected, marcadores_por_confirmar: unconfirmedCount, secciones: result.sections }
+      return { proposalId: newProposal.id, version, resumen_cambio: result.changeSummary, secciones_afectadas: result.sectionsAffected, marcadores_por_confirmar: unconfirmedCount, secciones: result.sections, marco_logico: mlFinal }
     },
   },
 
@@ -495,17 +492,104 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
     inputSchema: { type: 'object', properties: {} },
     handler: async () => {
       const statuses = ['NUEVA', 'EN_ANALISIS', 'COMPATIBLE', 'APROBADA_PREPARACION', 'DESCARTADA'] as const
-      const [porEstado, propuestas, alertasNoLeidas, ultimaSync] = await Promise.all([
-        Promise.all(statuses.map(async (s) => [s, await db.opportunity.count({ where: { status: s } }) as Promise<number>])),
-        db.proposal.count(),
+      const [porEstado, propuestasPorOpp, alertasNoLeidas, ultimaSync] = await Promise.all([
+        Promise.all(statuses.map(async (s) => [s, await db.opportunity.count({ where: { status: s } })])),
+        db.proposal.groupBy({ by: ['opportunityId'] }),
         db.notification.count({ where: { read: false } }),
         db.auditEvent.findFirst({ where: { action: 'SYNC_SECOP' }, orderBy: { createdAt: 'desc' } }),
       ])
       return {
         oportunidades_por_estado: Object.fromEntries(porEstado),
-        propuestas_registradas: propuestas,
+        propuestas_registradas: propuestasPorOpp.length, // oportunidades con propuestas (no versiones)
         alertas_no_leidas: alertasNoLeidas,
         ultima_sincronizacion: ultimaSync ? { fecha: ultimaSync.createdAt, detalle: ultimaSync.detail } : null,
+      }
+    },
+  },
+
+  get_marco_logico: {
+    description:
+      'Devuelve la Matriz de Marco Lógico del borrador más reciente de una oportunidad: árbol de problemas (problema central, causas, efectos), objetivo central y filas Fin/Propósito/Componentes/Actividades con indicadores verificables, medios de verificación y supuestos.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        opportunityId: { type: 'string', description: 'ID de la oportunidad (toma el borrador más reciente)' },
+        proposalId: { type: 'string', description: 'ID de la propuesta (alternativo a opportunityId)' },
+      },
+    },
+    handler: async (args) => {
+      const proposalId = str(args.proposalId)
+      let proposal = null as { id: string; version: number; logicFrameworkJson: string | null } | null
+      if (proposalId) {
+        proposal = await db.proposal.findUnique({ where: { id: proposalId }, select: { id: true, version: true, logicFrameworkJson: true } })
+      } else {
+        const oppId = str(args.opportunityId)
+        if (!oppId) throw new Error('Entrega opportunityId o proposalId')
+        proposal = await db.proposal.findFirst({ where: { opportunityId: oppId }, orderBy: { version: 'desc' }, select: { id: true, version: true, logicFrameworkJson: true } })
+      }
+      if (!proposal) throw new Error('Propuesta no encontrada')
+      const ml = safeParseMarcoLogico(proposal.logicFrameworkJson)
+      return {
+        proposalId: proposal.id,
+        version: proposal.version,
+        marco_logico: ml,
+        nota: ml
+          ? 'El marco lógico es una propuesta estructural generada por IA: valida indicadores, medios y supuestos contra el pliego real antes de presentar.'
+          : 'Esta propuesta aún no tiene marco lógico: pide una nueva versión o refina con la instrucción «construye el marco lógico completo con árbol de problemas».',
+      }
+    },
+  },
+
+  analyze_pliego_text: {
+    description:
+      'Analiza el TEXTO de un pliego de condiciones, términos de referencia, contrato u otro documento de contratación pública: extrae objeto, entidad, valores, plazos, requisitos habilitantes, garantías, criterios de evaluación, si exige marco lógico y alertas. (Extrae el texto del PDF antes de llamar esta tool.)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Texto del documento (máx. 60.000 caracteres)' },
+      },
+      required: ['text'],
+    },
+    handler: async (args) => {
+      const text = str(args.text).trim()
+      if (!text) throw new Error('text es obligatorio')
+      if (text.length > 60000) throw new Error('El texto supera 60.000 caracteres: divide el documento en partes')
+      return analyzePliegoText(text)
+    },
+  },
+
+  get_inbox: {
+    description:
+      'Mensajes recientes del agente por los canales de mensajería (Telegram, WhatsApp y panel web): conversaciones, transcripciones de notas de voz y análisis de pliegos/imágenes/video recibidos.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', enum: ['TELEGRAM', 'WHATSAPP', 'WEB'], description: 'Filtrar por canal (opcional)' },
+        limit: { type: 'number', maximum: 50, default: 20, description: 'Máximo de mensajes (1-50)' },
+      },
+    },
+    handler: async (args) => {
+      const limit = Math.min(Math.max(num(args.limit) ?? 20, 1), 50)
+      const channel = str(args.channel)
+      const messages = await db.channelMessage.findMany({
+        where: ['TELEGRAM', 'WHATSAPP', 'WEB'].includes(channel) ? { channel } : {},
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+      return {
+        total: messages.length,
+        messages: messages.map((m) => ({
+          id: m.id,
+          canal: m.channel,
+          chat: m.chatName || m.chatId,
+          direccion: m.direction,
+          tipo: m.type,
+          texto: m.text,
+          transcripcion: m.transcript,
+          analisis: m.analysis,
+          estado: m.status,
+          fecha: m.createdAt,
+        })),
       }
     },
   },
@@ -538,7 +622,7 @@ export async function handleRpcMessage(msg: JsonRpcMessage): Promise<RpcOutcome>
           capabilities: { tools: { listChanged: false } },
           serverInfo: MCP_SERVER_INFO,
           instructions:
-            'Agente SECOP Radar: monitorea oportunidades de contratación pública colombiana (SECOP II), las analiza contra el perfil de la empresa y diseña proyectos-respuesta completos. Empieza con get_dashboard_stats o list_opportunities. Las tools de escritura respetan el flujo de aprobación humana.',
+            'Agente SECOP Radar: monitorea oportunidades de contratación pública colombiana (SECOP II), las analiza contra el perfil de la empresa, diseña proyectos-respuesta completos con Marco Lógico (árbol de problemas + matriz Fin/Propósito/Componentes/Actividades) y los refina conversacionalmente. También analiza pliegos/documentos y consulta la bandeja de canales de mensajería (Telegram/WhatsApp). Empieza con get_dashboard_stats o list_opportunities. Las tools de escritura respetan el flujo de aprobación humana.',
         }),
       }
     }

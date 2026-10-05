@@ -7,12 +7,11 @@ export async function GET() {
   return safe(async () => {
     const company = await db.company.findFirst({ orderBy: { createdAt: 'asc' } })
 
-    const [nuevas, enAnalisis, compatibles, aprobadas, enPreparacion, descartadas, lastSync, alertsRaw] = await Promise.all([
+    const [nuevas, enAnalisis, compatibles, aprobadas, descartadas, lastSync, alertsRaw] = await Promise.all([
       db.opportunity.count({ where: { status: 'NUEVA' } }),
       db.opportunity.count({ where: { status: 'EN_ANALISIS' } }),
       db.opportunity.count({ where: { status: 'COMPATIBLE' } }),
       db.opportunity.count({ where: { status: 'APROBADA_PREPARACION' } }),
-      db.proposal.count({ where: { status: 'BORRADOR' } }),
       db.opportunity.count({ where: { status: 'DESCARTADA' } }),
       db.auditEvent.findFirst({ where: { action: 'SYNC_SECOP' }, orderBy: { createdAt: 'desc' } }),
       db.notification.findMany({ orderBy: { createdAt: 'desc' }, take: 8, include: { opportunity: { include: { process: true } } } }),
@@ -39,7 +38,12 @@ export async function GET() {
       return d > now && d - now < 15 * 24 * 3600 * 1000
     })
 
-    const proposalsCount = await db.proposal.count()
+    // Conteo por OPORTUNIDADES con propuestas (no por versiones del borrador)
+    const [versionesPorOpp, borradorPorOpp] = await Promise.all([
+      db.proposal.groupBy({ by: ['opportunityId'] }),
+      db.proposal.groupBy({ by: ['opportunityId'], where: { status: 'BORRADOR' } }),
+    ])
+
     const lastSyncData = lastSync
       ? {
           at: lastSync.createdAt,
@@ -50,7 +54,15 @@ export async function GET() {
 
     return {
       company: company ? { id: company.id, name: company.name } : null,
-      stats: { nuevas, enAnalisis, compatibles, aprobadas, enPreparacion, descartadas, propuestas: proposalsCount },
+      stats: {
+        nuevas,
+        enAnalisis,
+        compatibles,
+        aprobadas,
+        enPreparacion: borradorPorOpp.length,
+        descartadas,
+        propuestas: versionesPorOpp.length,
+      },
       topOpportunities: topOpportunities.map((o) => ({
         ...o,
         reasons: parseJsonArray(o.reasonsJson),

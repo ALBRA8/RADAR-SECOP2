@@ -3,6 +3,7 @@
 export interface ProcessData {
   id: string
   entity: string
+  reference?: string | null
   department?: string | null
   city?: string | null
   objectName: string
@@ -78,12 +79,29 @@ export interface ProposalMessageData {
   createdAt: string
 }
 
+export interface MarcoLogicoFilaData {
+  nivel: string
+  resumen: string
+  indicadores: string
+  mediosVerificacion: string
+  supuestos: string
+}
+
+export interface MarcoLogicoData {
+  problemaCentral: string
+  causas: string[]
+  efectos: string[]
+  objetivoCentral: string
+  filas: MarcoLogicoFilaData[]
+}
+
 export interface ProposalData {
   id: string
   version: number
   status: 'BORRADOR' | 'APROBADA'
   sections: ProposalSectionData[]
   checklists: ChecklistGroupData[]
+  marcoLogico?: MarcoLogicoData | null
   unconfirmedCount: number
   approvedBy?: string | null
   approvedAt?: string | null

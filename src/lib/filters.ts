@@ -59,7 +59,8 @@ export function applyDeterministicFilter(company: CompanyConfigData, rec: RawSec
 
   // 6. Ubicación permitida (departamento)
   if (company.departmentsAllowed.length > 0 && rec.department) {
-    const ok = company.departmentsAllowed.some((d) => eq(d, rec.department) || fuzzyDept(d, rec.department))
+    const dept = rec.department
+    const ok = company.departmentsAllowed.some((d) => eq(d, dept) || fuzzyDept(d, dept))
     if (!ok) discard.push(`Departamento "${rec.department}" fuera de la cobertura configurada`)
   }
 

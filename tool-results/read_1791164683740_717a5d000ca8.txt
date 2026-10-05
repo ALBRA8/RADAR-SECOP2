@@ -1,0 +1,738 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useState } from 'react'
+     4→     4→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+     5→     5→import { Button } from '@/components/ui/button'
+     6→     6→import { Badge } from '@/components/ui/badge'
+     7→     7→import { Separator } from '@/components/ui/separator'
+     8→     8→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+     9→     9→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+    10→    10→import { Input } from '@/components/ui/input'
+    11→    11→import { Label } from '@/components/ui/label'
+    12→    12→import { Textarea } from '@/components/ui/textarea'
+    13→    13→import { StatusBadge, ScoreBadge, DimIcon, ReqStatusBadge, UnconfirmedWarn, Spinner } from './shared'
+    14→    14→import {
+    15→    15→  fmtCOP, fmtDate, fmtDateTime, daysUntil,
+    16→    16→  DIM_COLORS,
+    17→    17→  type OpportunityData, type ProposalData, type ProposalMessageData, type MarcoLogicoData,
+    18→    18→} from './client-types'
+    19→    19→import {
+    20→    20→  ArrowLeft, ExternalLink, Landmark, Calendar, Tag, Clock,
+    21→    21→  FilePlus2, Ban, CheckCircle2, Building2, UserCheck, FileCheck2, ShieldAlert, FileText,
+    22→    22→  MessagesSquare, Send, Bot, User, Network, Download,
+    23→    23→} from 'lucide-react'
+    24→    24→import { useToast } from '@/hooks/use-toast'
+    25→    25→
+    26→    26→export function OpportunityDetailView({
+    27→    27→  opportunity,
+    28→    28→  loading,
+    29→    29→  onBack,
+    30→    30→  onAnalyze,
+    31→    31→  onDiscard,
+    32→    32→  onApprovePrep,
+    33→    33→  onGenerateProposal,
+    34→    34→  onApproveProposal,
+    35→    35→  onRefineProposal,
+    36→    36→  analyzing,
+    37→    37→  generating,
+    38→    38→  refining,
+    39→    39→}: {
+    40→    40→  opportunity: OpportunityData | null
+    41→    41→  loading: boolean
+    42→    42→  onBack: () => void
+    43→    43→  onAnalyze: (id: string) => void
+    44→    44→  onDiscard: (id: string, reason: string) => void
+    45→    45→  onApprovePrep: (id: string) => void
+    46→    46→  onGenerateProposal: (opportunityId: string) => void
+    47→    47→  onApproveProposal: (proposalId: string, decision: 'APROBADA' | 'RECHAZADA', approver: string, notes: string) => void
+    48→    48→  onRefineProposal: (proposalId: string, instruction: string) => void
+    49→    49→  analyzing: boolean
+    50→    50→  generating: boolean
+    51→    51→  refining: boolean
+    52→    52→}) {
+    53→    53→  const { toast } = useToast()
+    54→    54→  const [discardOpen, setDiscardOpen] = useState(false)
+    55→    55→  const [discardReason, setDiscardReason] = useState('')
+    56→    56→  const [approveOpen, setApproveOpen] = useState<ProposalData | null>(null)
+    57→    57→  const [approver, setApprover] = useState('')
+    58→    58→  const [approverNotes, setApproverNotes] = useState('')
+    59→    59→
+    60→    60→  if (loading) return <Spinner label="Cargando expediente…" />
+    61→    61→  if (!opportunity) return <p className="py-10 text-center text-muted-foreground">No se encontró la oportunidad.</p>
+    62→    62→
+    63→    63→  const o = opportunity
+    64→    64→  const p = o.process
+    65→    65→  const dDeadline = daysUntil(p.receptionDate)
+    66→    66→  const latestProposal = o.proposals && o.proposals.length > 0 ? o.proposals[0] : null
+    67→    67→  const active = o.status !== 'DESCARTADA'
+    68→    68→
+    69→    69→  const submitDiscard = () => {
+    70→    70→    if (!discardReason.trim()) {
+    71→    71→      toast({ title: 'El motivo del descarte es obligatorio', variant: 'destructive' })
+    72→    72→      return
+    73→    73→    }
+    74→    74→    setDiscardOpen(false)
+    75→    75→    onDiscard(o.id, discardReason.trim())
+    76→    76→    setDiscardReason('')
+    77→    77→  }
+    78→    78→
+    79→    79→  const submitApproval = () => {
+    80→    80→    if (!approveOpen) return
+    81→    81→    if (!approver.trim()) {
+    82→    82→      toast({ title: 'Registra el nombre del aprobador', variant: 'destructive' })
+    83→    83→      return
+    84→    84→    }
+    85→    85→    onApproveProposal(approveOpen.id, 'APROBADA', approver.trim(), approverNotes.trim())
+    86→    86→    setApproveOpen(null)
+    87→    87→    setApprover('')
+    88→    88→    setApproverNotes('')
+    89→    89→  }
+    90→    90→
+    91→    91→  return (
+    92→    92→    <div className="space-y-5">
+    93→    93→      {/* Cabecera */}
+    94→    94→      <div>
+    95→    95→        <Button variant="ghost" size="sm" onClick={onBack} className="mb-3 min-h-9">
+    96→    96→          <ArrowLeft className="w-4 h-4 mr-1.5" aria-hidden /> Volver a oportunidades
+    97→    97→        </Button>
+    98→    98→        <Card>
+    99→    99→          <CardContent className="p-5">
+   100→   100→            <div className="flex flex-col lg:flex-row gap-4">
+   101→   101→              <div className="flex gap-3 items-start shrink-0">
+   102→   102→                <ScoreBadge score={o.score} size="lg" />
+   103→   103→              </div>
+   104→   104→              <div className="flex-1 min-w-0">
+   105→   105→                <div className="flex flex-wrap items-center gap-2">
+   106→   106→                  <span className="font-mono text-xs bg-muted rounded px-1.5 py-0.5">{p.id}</span>
+   107→   107→                  <StatusBadge status={o.status} />
+   108→   108→                  {p.reference && <span className="text-xs text-muted-foreground">Ref.: {p.reference}</span>}
+   109→   109→                </div>
+   110→   110→                <h2 className="text-lg font-semibold mt-1.5 leading-snug">{p.objectName}</h2>
+   111→   111→                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2 mt-3 text-sm">
+   112→   112→                  <InfoItem icon={Landmark} label="Entidad" value={p.entity} />
+   113→   113→                  <InfoItem icon={Building2} label="Ubicación" value={`${p.city || '—'} / ${p.department || '—'}`} />
+   114→   114→                  <InfoItem icon={Tag} label="Valor base" value={fmtCOP(p.basePrice)} strong />
+   115→   115→                  <InfoItem icon={Calendar} label="Publicación" value={fmtDate(p.publishDate)} />
+   116→   116→                  <InfoItem icon={Clock} label="Duración" value={p.duration ? `${p.duration} ${p.durationUnit || ''}` : 'No publicada'} />
+   117→   117→                  <InfoItem icon={FileCheck2} label="Modalidad" value={p.modality || '—'} />
+   118→   118→                  <InfoItem icon={FileCheck2} label="Tipo de contrato" value={p.contractType || '—'} />
+   119→   119→                  <InfoItem
+   120→   120→                    icon={ShieldAlert}
+   121→   121→                    label="Recepción de respuestas"
+   122→   122→                    value={
+   123→   123→                      p.receptionDate
+   124→   124→                        ? `${fmtDate(p.receptionDate)}${dDeadline != null ? ` (${dDeadline} día(s))` : ''}`
+   125→   125→                        : 'No publicada — verificar en SECOP'
+   126→   126→                    }
+   127→   127→                    strong={dDeadline != null && dDeadline <= 7}
+   128→   128→                  />
+   129→   129→                </div>
+   130→   130→                {p.description && (
+   131→   131→                  <div className="mt-3">
+   132→   132→                    <Separator className="mb-3" />
+   133→   133→                    <p className="text-sm text-muted-foreground leading-relaxed">{p.description}</p>
+   134→   134→                  </div>
+   135→   135→                )}
+   136→   136→                <div className="flex flex-wrap gap-2 mt-4">
+   137→   137→                  {p.url && (
+   138→   138→                    <a href={p.url} target="_blank" rel="noopener noreferrer" tabIndex={0}>
+   139→   139→                      <Button size="sm" variant="outline" className="min-h-9">
+   140→   140→                        <ExternalLink className="w-4 h-4 mr-1.5" aria-hidden /> Ver en SECOP
+   141→   141→                      </Button>
+   142→   142→                    </a>
+   143→   143→                  )}
+   144→   144→                  {active && (o.status === 'NUEVA' || o.status === 'COMPATIBLE' || o.status === 'EN_ANALISIS') && (
+   145→   145→                    <Button size="sm" onClick={() => onAnalyze(o.id)} disabled={analyzing} className="bg-emerald-600 hover:bg-emerald-700 min-h-9">
+   146→   146→                      <FilePlus2 className="w-4 h-4 mr-1.5" aria-hidden />
+   147→   147→                      {analyzing ? 'Analizando con IA…' : o.requirements && o.requirements.length > 0 ? 'Re-analizar con IA' : 'Analizar con IA'}
+   148→   148→                    </Button>
+   149→   149→                  )}
+   150→   150→                  {active && o.status === 'COMPATIBLE' && (
+   151→   151→                    <Button size="sm" variant="outline" onClick={() => onApprovePrep(o.id)} className="border-lime-500 text-lime-700 hover:bg-lime-50 min-h-9">
+   152→   152→                      <CheckCircle2 className="w-4 h-4 mr-1.5" aria-hidden /> Aprobar para preparación
+   153→   153→                    </Button>
+   154→   154→                  )}
+   155→   155→                  {active && o.status === 'APROBADA_PREPARACION' && (
+   156→   156→                    <Button size="sm" onClick={() => onGenerateProposal(o.id)} disabled={generating} className="bg-lime-600 hover:bg-lime-700 min-h-9">
+   157→   157→                      <FileText className={`w-4 h-4 mr-1.5 ${generating ? 'animate-pulse' : ''}`} aria-hidden />
+   158→   158→                      {generating ? 'Generando borrador…' : latestProposal ? 'Generar nueva versión' : 'Generar borrador de propuesta'}
+   159→   159→                    </Button>
+   160→   160→                  )}
+   161→   161→                  {active && (
+   162→   162→                    <Button size="sm" variant="outline" onClick={() => setDiscardOpen(true)} className="border-rose-300 text-rose-700 hover:bg-rose-50 min-h-9">
+   163→   163→                      <Ban className="w-4 h-4 mr-1.5" aria-hidden /> Descartar
+   164→   164→                    </Button>
+   165→   165→                  )}
+   166→   166→                </div>
+   167→   167→                {o.status === 'DESCARTADA' && o.discardReason && (
+   168→   168→                  <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-3 py-2 mt-3">
+   169→   169→                    Descartada: {o.discardReason}
+   170→   170→                  </p>
+   171→   171→                )}
+   172→   172→              </div>
+   173→   173→            </div>
+   174→   174→          </CardContent>
+   175→   175→        </Card>
+   176→   176→      </div>
+   177→   177→
+   178→   178→      <Tabs defaultValue="compatibilidad">
+   179→   179→        <TabsList className="w-full sm:w-auto flex-wrap h-auto">
+   180→   180→          <TabsTrigger value="compatibilidad">Compatibilidad explicada</TabsTrigger>
+   181→   181→          <TabsTrigger value="matriz">Matriz de requisitos</TabsTrigger>
+   182→   182→          <TabsTrigger value="riesgos">Riesgos y faltantes</TabsTrigger>
+   183→   183→          <TabsTrigger value="propuesta">Propuesta {latestProposal ? `· v${latestProposal.version}` : ''}</TabsTrigger>
+   184→   184→        </TabsList>
+   185→   185→
+   186→   186→        {/* Compatibilidad */}
+   187→   187→        <TabsContent value="compatibilidad" className="mt-4 space-y-4">
+   188→   188→          {o.analysisSummary && (
+   189→   189→            <Card>
+   190→   190→              <CardContent className="p-4">
+   191→   191→                <p className="text-sm leading-relaxed">{o.analysisSummary}</p>
+   192→   192→              </CardContent>
+   193→   193→            </Card>
+   194→   194→          )}
+   195→   195→          <Card>
+   196→   196→            <CardHeader className="pb-2">
+   197→   197→              <CardTitle className="text-base">¿Por qué esta oportunidad es (o no) compatible?</CardTitle>
+   198→   198→              <p className="text-sm text-muted-foreground">Cada dimensión se evalúa contra el perfil registrado de la empresa. El sistema muestra las razones, no solo el porcentaje.</p>
+   199→   199→            </CardHeader>
+   200→   200→            <CardContent className="space-y-3">
+   201→   201→              {o.reasons.length === 0 && <p className="text-sm text-muted-foreground">Ejecuta una sincronización para recalcular la compatibilidad.</p>}
+   202→   202→              {o.reasons.map((d) => (
+   203→   203→                <div key={d.key} className="flex items-start gap-3 rounded-lg border p-3">
+   204→   204→                  <DimIcon result={d.result} />
+   205→   205→                  <div className="flex-1 min-w-0">
+   206→   206→                    <div className="flex flex-wrap items-center justify-between gap-2">
+   207→   207→                      <p className="font-medium text-sm">{d.label}</p>
+   208→   208→                      <Badge variant="secondary" className="text-[11px]">
+   209→   209→                        peso {Math.round(d.weight * 100)}% · {Math.round(d.score * 100)}%
+   210→   210→                      </Badge>
+   211→   211→                    </div>
+   212→   212→                    <p className={`text-sm mt-0.5 ${DIM_COLORS[d.result]}`}>{d.reason}</p>
+   213→   213→                  </div>
+   214→   214→                </div>
+   215→   215→              ))}
+   216→   216→            </CardContent>
+   217→   217→          </Card>
+   218→   218→        </TabsContent>
+   219→   219→
+   220→   220→        {/* Matriz de requisitos */}
+   221→   221→        <TabsContent value="matriz" className="mt-4">
+   222→   222→          <Card>
+   223→   223→            <CardHeader className="pb-2">
+   224→   224→              <CardTitle className="text-base">Matriz de cumplimiento</CardTitle>
+   225→   225→              <p className="text-sm text-muted-foreground">
+   226→   226→                REQUISITO | ESTADO | EVIDENCIA | ACCIÓN — construida con la evidencia registrada de la empresa. Nada se marca «Cumple» sin sustento.
+   227→   227→              </p>
+   228→   228→            </CardHeader>
+   229→   229→            <CardContent>
+   230→   230→              {!o.requirements || o.requirements.length === 0 ? (
+   231→   231→                <p className="text-sm text-muted-foreground py-4">
+   232→   232→                  Aún no hay matriz. Usa «Analizar con IA» para generarla.
+   233→   233→                </p>
+   234→   234→              ) : (
+   235→   235→                <div className="overflow-x-auto">
+   236→   236→                  <table className="w-full text-sm border-collapse">
+   237→   237→                    <thead>
+   238→   238→                      <tr className="border-b text-left text-xs text-muted-foreground uppercase tracking-wide">
+   239→   239→                        <th className="py-2 pr-3 font-medium">Requisito</th>
+   240→   240→                        <th className="py-2 pr-3 font-medium">Estado</th>
+   241→   241→                        <th className="py-2 pr-3 font-medium">Evidencia</th>
+   242→   242→                        <th className="py-2 font-medium">Acción</th>
+   243→   243→                      </tr>
+   244→   244→                    </thead>
+   245→   245→                    <tbody>
+   246→   246→                      {o.requirements.map((r) => (
+   247→   247→                        <tr key={r.id} className="border-b last:border-0 align-top">
+   248→   248→                          <td className="py-3 pr-3">
+   249→   249→                            <span className="font-mono text-xs text-muted-foreground mr-1.5">{r.code}</span>
+   250→   250→                            {r.description}
+   251→   251→                            <Badge variant="secondary" className="ml-2 text-[10px]">{r.source === 'IA' ? 'IA' : 'Reglas'}</Badge>
+   252→   252→                          </td>
+   253→   253→                          <td className="py-3 pr-3"><ReqStatusBadge status={r.status} /></td>
+   254→   254→                          <td className="py-3 pr-3 text-muted-foreground">{r.evidence || '—'}</td>
+   255→   255→                          <td className="py-3 text-muted-foreground">{r.action || '—'}</td>
+   256→   256→                        </tr>
+   257→   257→                      ))}
+   258→   258→                    </tbody>
+   259→   259→                  </table>
+   260→   260→                </div>
+   261→   261→              )}
+   262→   262→            </CardContent>
+   263→   263→          </Card>
+   264→   264→        </TabsContent>
+   265→   265→
+   266→   266→        {/* Riesgos */}
+   267→   267→        <TabsContent value="riesgos" className="mt-4 grid md:grid-cols-2 gap-4">
+   268→   268→          <Card>
+   269→   269→            <CardHeader className="pb-2">
+   270→   270→              <CardTitle className="text-base flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-rose-600" aria-hidden /> Riesgos identificados</CardTitle>
+   271→   271→            </CardHeader>
+   272→   272→            <CardContent>
+   273→   273→              {o.risks.length === 0 ? (
+   274→   274→                <p className="text-sm text-muted-foreground">Sin riesgos registrados en el último análisis.</p>
+   275→   275→              ) : (
+   276→   276→                <ul className="space-y-2">
+   277→   277→                  {o.risks.map((r, i) => (
+   278→   278→                    <li key={i} className="text-sm rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-rose-900">{r}</li>
+   279→   279→                  ))}
+   280→   280→                </ul>
+   281→   281→              )}
+   282→   282→            </CardContent>
+   283→   283→          </Card>
+   284→   284→          <Card>
+   285→   285→            <CardHeader className="pb-2">
+   286→   286→              <CardTitle className="text-base flex items-center gap-2"><FileCheck2 className="w-4 h-4 text-amber-600" aria-hidden /> Documentos faltantes</CardTitle>
+   287→   287→            </CardHeader>
+   288→   288→            <CardContent>
+   289→   289→              {o.missingDocs.length === 0 ? (
+   290→   290→                <p className="text-sm text-muted-foreground">No se detectaron documentos faltantes en el expediente de la empresa.</p>
+   291→   291→              ) : (
+   292→   292→                <ul className="space-y-2">
+   293→   293→                  {o.missingDocs.map((d, i) => (
+   294→   294→                    <li key={i} className="text-sm rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">{d}</li>
+   295→   295→                  ))}
+   296→   296→                </ul>
+   297→   297→              )}
+   298→   298→              {o.nextAction && (
+   299→   299→                <>
+   300→   300→                  <Separator className="my-3" />
+   301→   301→                  <p className="text-sm"><strong>Siguiente acción:</strong> {o.nextAction}</p>
+   302→   302→                </>
+   303→   303→              )}
+   304→   304→            </CardContent>
+   305→   305→          </Card>
+   306→   306→        </TabsContent>
+   307→   307→
+   308→   308→        {/* Propuesta */}
+   309→   309→        <TabsContent value="propuesta" className="mt-4 space-y-4">
+   310→   310→          {o.status !== 'APROBADA_PREPARACION' ? (
+   311→   311→            <Card>
+   312→   312→              <CardContent className="p-6 text-center">
+   313→   313→                <FileText className="w-8 h-8 mx-auto text-muted-foreground" aria-hidden />
+   314→   314→                <p className="mt-2 font-medium">La propuesta se genera después de la aprobación humana</p>
+   315→   315→                <p className="text-sm text-muted-foreground mt-1 max-w-lg mx-auto">
+   316→   316→                  Cuando la oportunidad esté analizada y quieras prepararla, apruébala para preparación (Módulo H). Así queda trazabilidad de quién autorizó cada paso.
+   317→   317→                </p>
+   318→   318→              </CardContent>
+   319→   319→            </Card>
+   320→   320→          ) : !latestProposal ? (
+   321→   321→            <Card>
+   322→   322→              <CardContent className="p-6 text-center">
+   323→   323→                <FileText className="w-8 h-8 mx-auto text-muted-foreground" aria-hidden />
+   324→   324→                <p className="mt-2 font-medium">Oportunidad aprobada — lista para preparar</p>
+   325→   325→                <p className="text-sm text-muted-foreground mt-1">Genera el borrador: el agente usará únicamente la información registrada de la empresa y marcará lo pendiente.</p>
+   326→   326→                <Button onClick={() => onGenerateProposal(o.id)} disabled={generating} className="mt-4 bg-lime-600 hover:bg-lime-700 min-h-11">
+   327→   327→                  <FileText className="w-4 h-4 mr-2" aria-hidden /> {generating ? 'Generando…' : 'Generar borrador'}
+   328→   328→                </Button>
+   329→   329→              </CardContent>
+   330→   330→            </Card>
+   331→   331→          ) : (
+   332→   332→            <ProposalPanel
+   333→   333→              proposal={latestProposal}
+   334→   334→              messages={o.messages || []}
+   335→   335→              generating={generating}
+   336→   336→              refining={refining}
+   337→   337→              onGenerate={() => onGenerateProposal(o.id)}
+   338→   338→              onApprove={() => setApproveOpen(latestProposal)}
+   339→   339→              onReject={(notes) => onApproveProposal(latestProposal.id, 'RECHAZADA', approver || 'Responsable', notes)}
+   340→   340→              onRefine={(instruction) => onRefineProposal(latestProposal.id, instruction)}
+   341→   341→            />
+   342→   342→          )}
+   343→   343→        </TabsContent>
+   344→   344→      </Tabs>
+   345→   345→
+   346→   346→      {/* Diálogo descarte */}
+   347→   347→      <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+   348→   348→        <DialogContent>
+   349→   349→          <DialogHeader>
+   350→   350→            <DialogTitle>Descartar oportunidad</DialogTitle>
+   351→   351→          </DialogHeader>
+   352→   352→          <div className="space-y-2">
+   353→   353→            <Label htmlFor="motivo">Motivo del descarte (obligatorio, queda en auditoría)</Label>
+   354→   354→            <Textarea id="motivo" value={discardReason} onChange={(e) => setDiscardReason(e.target.value)} placeholder="Ej.: fuera de la cobertura geográfica del área operativa…" rows={3} />
+   355→   355→          </div>
+   356→   356→          <DialogFooter>
+   357→   357→            <Button variant="outline" onClick={() => setDiscardOpen(false)}>Cancelar</Button>
+   358→   358→            <Button variant="destructive" onClick={submitDiscard}>Descartar</Button>
+   359→   359→          </DialogFooter>
+   360→   360→        </DialogContent>
+   361→   361→      </Dialog>
+   362→   362→
+   363→   363→      {/* Diálogo aprobación */}
+   364→   364→      <Dialog open={!!approveOpen} onOpenChange={(open) => !open && setApproveOpen(null)}>
+   365→   365→        <DialogContent>
+   366→   366→          <DialogHeader>
+   367→   367→            <DialogTitle>Aprobación de la propuesta (Módulo H)</DialogTitle>
+   368→   368→          </DialogHeader>
+   369→   369→          <div className="space-y-3">
+   370→   370→            <p className="text-sm text-muted-foreground">
+   371→   371→              Al aprobar declaras que revisaste la matriz de requisitos, los documentos y el borrador. La decisión queda registrada con fecha y responsable.
+   372→   372→            </p>
+   373→   373→            <div className="space-y-1.5">
+   374→   374→              <Label htmlFor="aprobador">Nombre del responsable que aprueba</Label>
+   375→   375→              <Input id="aprobador" value={approver} onChange={(e) => setApprover(e.target.value)} placeholder="Ej.: María Gómez — Gerente" />
+   376→   376→            </div>
+   377→   377→            <div className="space-y-1.5">
+   378→   378→              <Label htmlFor="notas">Notas (opcional)</Label>
+   379→   379→              <Textarea id="notas" value={approverNotes} onChange={(e) => setApproverNotes(e.target.value)} rows={2} placeholder="Condiciones confirmadas, precio aprobado, etc." />
+   380→   380→            </div>
+   381→   381→          </div>
+   382→   382→          <DialogFooter>
+   383→   383→            <Button variant="outline" onClick={() => setApproveOpen(null)}>Cancelar</Button>
+   384→   384→            <Button onClick={submitApproval} className="bg-emerald-600 hover:bg-emerald-700">
+   385→   385→              <UserCheck className="w-4 h-4 mr-1.5" aria-hidden /> Aprobar propuesta
+   386→   386→            </Button>
+   387→   387→          </DialogFooter>
+   388→   388→        </DialogContent>
+   389→   389→      </Dialog>
+   390→   390→    </div>
+   391→   391→  )
+   392→   392→}
+   393→   393→
+   394→   394→function InfoItem({ icon: Icon, label, value, strong }: { icon: typeof Landmark; label: string; value: string; strong?: boolean }) {
+   395→   395→  return (
+   396→   396→    <div className="flex items-start gap-2 min-w-0">
+   397→   397→      <Icon className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" aria-hidden />
+   398→   398→      <div className="min-w-0">
+   399→   399→        <p className="text-xs text-muted-foreground">{label}</p>
+   400→   400→        <p className={`text-sm leading-snug ${strong ? 'font-semibold' : 'font-medium'} break-words`}>{value}</p>
+   401→   401→      </div>
+   402→   402→    </div>
+   403→   403→  )
+   404→   404→}
+   405→   405→
+   406→   406→/** Matriz de Marco Lógico: árbol de problemas → objetivos + tabla Fin/Propósito/Componentes/Actividades. */
+   407→   407→function MarcoLogicoCard({ marcoLogico }: { marcoLogico: MarcoLogicoData | null | undefined }) {
+   408→   408→  if (!marcoLogico) {
+   409→   409→    return (
+   410→   410→      <Card>
+   411→   411→        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+   412→   412→          <span className="rounded-lg bg-muted p-2 w-9 h-9 grid place-items-center shrink-0" aria-hidden>
+   413→   413→            <Network className="w-5 h-5 text-muted-foreground" />
+   414→   414→          </span>
+   415→   415→          <div className="min-w-0 flex-1">
+   416→   416→            <p className="text-sm font-medium">Marco lógico aún no generado</p>
+   417→   417→            <p className="text-sm text-muted-foreground">
+   418→   418→              Muchos pliegos exigen marco lógico. Pídele al agente «Construye el marco lógico completo» en el chat de abajo y generará el árbol de problemas + la matriz por niveles.
+   419→   419→            </p>
+   420→   420→          </div>
+   421→   421→        </CardContent>
+   422→   422→      </Card>
+   423→   423→    )
+   424→   424→  }
+   425→   425→  const ml = marcoLogico
+   426→   426→  return (
+   427→   427→    <Card>
+   428→   428→      <CardHeader className="pb-3">
+   429→   429→        <CardTitle className="text-base flex items-center gap-2">
+   430→   430→          <Network className="w-5 h-5 text-teal-600" aria-hidden />
+   431→   431→          Matriz de Marco Lógico
+   432→   432→        </CardTitle>
+   433→   433→        <p className="text-sm text-muted-foreground mt-1">
+   434→   434→          Especialidad del agente: lógica de intervención Fin → Propósito → Componentes → Actividades, con indicadores verificables, medios y supuestos. Valídala contra el pliego antes de presentar.
+   435→   435→        </p>
+   436→   436→      </CardHeader>
+   437→   437→      <CardContent className="space-y-4">
+   438→   438→        {/* Árbol de problemas → objetivos */}
+   439→   439→        <div className="grid md:grid-cols-2 gap-3">
+   440→   440→          <div className="rounded-lg border border-rose-200 bg-rose-50/60 p-3">
+   441→   441→            <p className="text-xs font-semibold uppercase tracking-wide text-rose-700 mb-1.5">Árbol de problemas</p>
+   442→   442→            <p className="text-sm"><strong>Problema central:</strong> {ml.problemaCentral || 'n/d'}</p>
+   443→   443→            {ml.causas.length > 0 && (
+   444→   444→              <p className="text-sm mt-1.5"><strong>Causas:</strong></p>
+   445→   445→            )}
+   446→   446→            <ul className="list-disc list-inside text-sm text-muted-foreground">
+   447→   447→              {ml.causas.map((c, i) => <li key={i}>{c}</li>)}
+   448→   448→            </ul>
+   449→   449→            {ml.efectos.length > 0 && (
+   450→   450→              <p className="text-sm mt-1.5"><strong>Efectos:</strong></p>
+   451→   451→            )}
+   452→   452→            <ul className="list-disc list-inside text-sm text-muted-foreground">
+   453→   453→              {ml.efectos.map((c, i) => <li key={i}>{c}</li>)}
+   454→   454→            </ul>
+   455→   455→          </div>
+   456→   456→          <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+   457→   457→            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 mb-1.5">Árbol de objetivos (espejo)</p>
+   458→   458→            <p className="text-sm"><strong>Objetivo central:</strong> {ml.objetivoCentral || 'n/d'}</p>
+   459→   459→            <p className="text-sm text-muted-foreground mt-1.5">
+   460→   460→              Cada componente de la matriz responde a una causa; cada indicador verifica un objetivo.
+   461→   461→            </p>
+   462→   462→          </div>
+   463→   463→        </div>
+   464→   464→
+   465→   465→        {/* Matriz */}
+   466→   466→        <div className="overflow-x-auto">
+   467→   467→          <table className="w-full text-sm border-collapse min-w-[640px]">
+   468→   468→            <thead>
+   469→   469→              <tr className="border-b text-left text-xs text-muted-foreground uppercase tracking-wide">
+   470→   470→                <th className="py-2 pr-3 font-medium w-32">Nivel</th>
+   471→   471→                <th className="py-2 pr-3 font-medium">Resumen narrativo</th>
+   472→   472→                <th className="py-2 pr-3 font-medium">Indicadores verificables</th>
+   473→   473→                <th className="py-2 pr-3 font-medium">Medios de verificación</th>
+   474→   474→                <th className="py-2 font-medium">Supuestos</th>
+   475→   475→              </tr>
+   476→   476→            </thead>
+   477→   477→            <tbody>
+   478→   478→              {ml.filas.map((f, i) => (
+   479→   479→                <tr key={i} className="border-b last:border-0 align-top">
+   480→   480→                  <td className="py-3 pr-3 font-medium whitespace-nowrap">{f.nivel}</td>
+   481→   481→                  <td className="py-3 pr-3">{f.resumen || '—'}</td>
+   482→   482→                  <td className="py-3 pr-3 text-muted-foreground">{f.indicadores || '—'}</td>
+   483→   483→                  <td className="py-3 pr-3 text-muted-foreground">{f.mediosVerificacion || '—'}</td>
+   484→   484→                  <td className="py-3 text-muted-foreground">{f.supuestos || '—'}</td>
+   485→   485→                </tr>
+   486→   486→              ))}
+   487→   487→            </tbody>
+   488→   488→          </table>
+   489→   489→        </div>
+   490→   490→      </CardContent>
+   491→   491→    </Card>
+   492→   492→  )
+   493→   493→}
+   494→   494→
+   495→   495→function ProposalPanel({
+   496→   496→  proposal,
+   497→   497→  messages,
+   498→   498→  generating,
+   499→   499→  refining,
+   500→   500→  onGenerate,
+   501→   501→  onApprove,
+   502→   502→  onReject,
+   503→   503→  onRefine,
+   504→   504→}: {
+   505→   505→  proposal: ProposalData
+   506→   506→  messages: ProposalMessageData[]
+   507→   507→  generating: boolean
+   508→   508→  refining: boolean
+   509→   509→  onGenerate: () => void
+   510→   510→  onApprove: () => void
+   511→   511→  onReject: (notes: string) => void
+   512→   512→  onRefine: (instruction: string) => void
+   513→   513→}) {
+   514→   514→  const { toast } = useToast()
+   515→   515→  const [chatInput, setChatInput] = useState('')
+   516→   516→
+   517→   517→  const sendInstruction = () => {
+   518→   518→    const text = chatInput.trim()
+   519→   519→    if (!text) {
+   520→   520→      toast({ title: 'Escribe una instrucción para el agente', variant: 'destructive' })
+   521→   521→      return
+   522→   522→    }
+   523→   523→    onRefine(text)
+   524→   524→    setChatInput('')
+   525→   525→  }
+   526→   526→
+   527→   527→  const quickIdeas = [
+   528→   528→    'Construye el marco lógico completo con árbol de problemas y matriz por niveles',
+   529→   529→    'Haz el cronograma más agresivo sin perder realismo',
+   530→   530→    'Enfatiza la experiencia registrada más pertinente para el objeto',
+   531→   531→    'Ajusta la metodología a una ejecución con entregables por quincena',
+   532→   532→    'Refuerza el resumen ejecutivo con un gancho de valor más directo',
+   533→   533→  ]
+   534→   534→  return (
+   535→   535→    <>
+   536→   536→      <Card>
+   537→   537→        <CardHeader className="pb-3">
+   538→   538→          <div className="flex flex-wrap items-center justify-between gap-3">
+   539→   539→            <div>
+   540→   540→              <CardTitle className="text-lg flex items-center gap-2">
+   541→   541→                <FileText className="w-5 h-5 text-lime-600" aria-hidden />
+   542→   542→                Borrador de propuesta — versión {proposal.version}
+   543→   543→              </CardTitle>
+   544→   544→              <p className="text-sm text-muted-foreground mt-1">
+   545→   545→                Generada {fmtDateTime(proposal.createdAt)}
+   546→   546→                {proposal.status === 'APROBADA' && ` · Aprobada por ${proposal.approvedBy} el ${fmtDate(proposal.approvedAt)}`}
+   547→   547→              </p>
+   548→   548→            </div>
+   549→   549→            <div className="flex flex-wrap gap-2">
+   550→   550→              <Button size="sm" variant="outline" onClick={onGenerate} disabled={generating} className="min-h-9">
+   551→   551→                <FilePlus2 className={`w-4 h-4 mr-1.5 ${generating ? 'animate-pulse' : ''}`} aria-hidden /> {generating ? 'Generando…' : 'Nueva versión'}
+   552→   552→              </Button>
+   553→   553→              <a href={`/api/proposals/${proposal.id}/export`} tabIndex={0} aria-label="Descargar propuesta en Word">
+   554→   554→                <Button size="sm" variant="outline" className="min-h-9">
+   555→   555→                  <Download className="w-4 h-4 mr-1.5" aria-hidden /> Word
+   556→   556→                </Button>
+   557→   557→              </a>
+   558→   558→              {proposal.status === 'BORRADOR' && (
+   559→   559→                <Button size="sm" onClick={onApprove} className="bg-emerald-600 hover:bg-emerald-700 min-h-9">
+   560→   560→                  <UserCheck className="w-4 h-4 mr-1.5" aria-hidden /> Revisar y aprobar
+   561→   561→                </Button>
+   562→   562→              )}
+   563→   563→            </div>
+   564→   564→          </div>
+   565→   565→        </CardHeader>
+   566→   566→        <CardContent className="space-y-4">
+   567→   567→          <UnconfirmedWarn count={proposal.unconfirmedCount} />
+   568→   568→          {proposal.sections.map((s) => (
+   569→   569→            <section key={s.key} className={`rounded-lg border p-4 ${s.unconfirmed ? 'border-amber-300 bg-amber-50/50' : ''}`}>
+   570→   570→              <h4 className="font-semibold text-sm flex items-center gap-2">
+   571→   571→                {s.title}
+   572→   572→                {s.unconfirmed && <Badge variant="outline" className="border-amber-400 text-amber-800 text-[10px]">Contiene datos por confirmar</Badge>}
+   573→   573→              </h4>
+   574→   574→              <p className="text-sm mt-2 whitespace-pre-wrap leading-relaxed">{s.content}</p>
+   575→   575→            </section>
+   576→   576→          ))}
+   577→   577→        </CardContent>
+   578→   578→      </Card>
+   579→   579→
+   580→   580→      {/* Matriz de Marco Lógico (especialidad del agente) */}
+   581→   581→      <MarcoLogicoCard marcoLogico={proposal.marcoLogico} />
+   582→   582→
+   583→   583→      {proposal.checklists.length > 0 && (
+   584→   584→        <Card>
+   585→   585→          <CardHeader className="pb-3">
+   586→   586→            <CardTitle className="text-base">Checklist de presentación</CardTitle>
+   587→   587→          </CardHeader>
+   588→   588→          <CardContent className="grid md:grid-cols-2 gap-4">
+   589→   589→            {proposal.checklists.map((g) => (
+   590→   590→              <div key={g.group}>
+   591→   591→                <h4 className="font-medium text-sm mb-2">{g.group}</h4>
+   592→   592→                <ul className="space-y-1.5">
+   593→   593→                  {g.items.map((it, i) => (
+   594→   594→                    <li key={i} className="flex items-start gap-2 text-sm">
+   595→   595→                      <span className={`mt-0.5 w-4 h-4 rounded border shrink-0 ${it.required ? 'border-emerald-600' : 'border-muted-foreground'}`} aria-hidden />
+   596→   596→                      <span>
+   597→   597→                        {it.label}
+   598→   598→                        {it.required && <span className="text-rose-600 ml-1" title="Obligatorio">*</span>}
+   599→   599→                      </span>
+   600→   600→                    </li>
+   601→   601→                  ))}
+   602→   602→                </ul>
+   603→   603→              </div>
+   604→   604→            ))}
+   605→   605→          </CardContent>
+   606→   606→        </Card>
+   607→   607→      )}
+   608→   608→
+   609→   609→      {/* Refinamiento conversacional con el agente (Módulo G+) */}
+   610→   610→      {proposal.status === 'BORRADOR' && (
+   611→   611→        <Card>
+   612→   612→          <CardHeader className="pb-3">
+   613→   613→            <CardTitle className="text-base flex items-center gap-2">
+   614→   614→              <MessagesSquare className="w-5 h-5 text-emerald-600" aria-hidden />
+   615→   615→              Refina el proyecto con el agente
+   616→   616→            </CardTitle>
+   617→   617→            <p className="text-sm text-muted-foreground mt-1">
+   618→   618→              Habla con el agente en lenguaje natural: ajusta metodología, cronograma, enfoque o énfasis. Cada instrucción genera una nueva versión trazable, siempre sin inventar datos de la empresa.
+   619→   619→            </p>
+   620→   620→          </CardHeader>
+   621→   621→          <CardContent className="space-y-3">
+   622→   622→            <div className="max-h-72 overflow-y-auto space-y-2.5 rounded-lg border bg-muted/30 p-3" aria-live="polite">
+   623→   623→              {messages.length === 0 && (
+   624→   624→                <p className="text-sm text-muted-foreground text-center py-3">
+   625→   625→                  Aún no hay conversación. Pídele al agente el primer ajuste del borrador.
+   626→   626→                </p>
+   627→   627→              )}
+   628→   628→              {messages.map((m) => (
+   629→   629→                <div key={m.id} className={`flex gap-2 ${m.role === 'USUARIO' ? 'justify-end' : 'justify-start'}`}>
+   630→   630→                  {m.role === 'AGENTE' && (
+   631→   631→                    <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-600 text-white grid place-items-center mt-0.5" aria-hidden>
+   632→   632→                      <Bot className="w-3.5 h-3.5" />
+   633→   633→                    </span>
+   634→   634→                  )}
+   635→   635→                  <div
+   636→   636→                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
+   637→   637→                      m.role === 'USUARIO' ? 'bg-emerald-600 text-white' : 'bg-background border'
+   638→   638→                    }`}
+   639→   639→                  >
+   640→   640→                    {m.role === 'AGENTE' && m.versionAfter != null && (
+   641→   641→                      <p className="text-[11px] opacity-80 mb-1 flex flex-wrap items-center gap-1">
+   642→   642→                        v{m.versionBefore} → v{m.versionAfter}
+   643→   643→                        {(() => {
+   644→   644→                          try {
+   645→   645→                            const keys = JSON.parse(m.sectionsAffected || '[]') as string[]
+   646→   646→                            return keys.length > 0 ? ` · ${keys.join(', ')}` : ''
+   647→   647→                          } catch {
+   648→   648→                            return ''
+   649→   649→                          }
+   650→   650→                        })()}
+   651→   651→                      </p>
+   652→   652→                    )}
+   653→   653→                    <p className="whitespace-pre-wrap">{m.content}</p>
+   654→   654→                    <p className={`text-[10px] mt-1 ${m.role === 'USUARIO' ? 'text-emerald-100' : 'text-muted-foreground'}`}>
+   655→   655→                      {fmtDateTime(m.createdAt)}
+   656→   656→                    </p>
+   657→   657→                  </div>
+   658→   658→                  {m.role === 'USUARIO' && (
+   659→   659→                    <span className="shrink-0 w-6 h-6 rounded-full bg-muted text-muted-foreground grid place-items-center mt-0.5" aria-hidden>
+   660→   660→                      <User className="w-3.5 h-3.5" />
+   661→   661→                    </span>
+   662→   662→                  )}
+   663→   663→                </div>
+   664→   664→              ))}
+   665→   665→              {refining && (
+   666→   666→                <div className="flex gap-2 justify-start">
+   667→   667→                  <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-600 text-white grid place-items-center mt-0.5 animate-pulse" aria-hidden>
+   668→   668→                    <Bot className="w-3.5 h-3.5" />
+   669→   669→                  </span>
+   670→   670→                  <div className="bg-background border rounded-lg px-3 py-2 text-sm text-muted-foreground">
+   671→   671→                    El agente está rediseñando el proyecto…
+   672→   672→                  </div>
+   673→   673→                </div>
+   674→   674→              )}
+   675→   675→            </div>
+   676→   676→
+   677→   677→            {!refining && messages.length === 0 && (
+   678→   678→              <div className="flex flex-wrap gap-2">
+   679→   679→                {quickIdeas.map((idea) => (
+   680→   680→                  <button
+   681→   681→                    key={idea}
+   682→   682→                    onClick={() => onRefine(idea)}
+   683→   683→                    className="text-xs rounded-full border px-3 py-1.5 text-muted-foreground hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-600"
+   684→   684→                  >
+   685→   685→                    {idea}
+   686→   686→                  </button>
+   687→   687→                ))}
+   688→   688→              </div>
+   689→   689→            )}
+   690→   690→
+   691→   691→            <div className="flex gap-2">
+   692→   692→              <Input
+   693→   693→                value={chatInput}
+   694→   694→                onChange={(e) => setChatInput(e.target.value)}
+   695→   695→                onKeyDown={(e) => {
+   696→   696→                  if (e.key === 'Enter' && !e.shiftKey) {
+   697→   697→                    e.preventDefault()
+   698→   698→                    sendInstruction()
+   699→   699→                  }
+   700→   700→                }}
+   701→   701→                placeholder="Ej.: adapta la propuesta al sector salud y refuerza los indicadores de atención…"
+   702→   702→                aria-label="Instrucción para el agente"
+   703→   703→                disabled={refining}
+   704→   704→                className="min-h-11"
+   705→   705→              />
+   706→   706→              <Button onClick={sendInstruction} disabled={refining} className="bg-emerald-600 hover:bg-emerald-700 min-h-11 shrink-0">
+   707→   707→                <Send className="w-4 h-4 mr-1.5" aria-hidden /> {refining ? 'Refinando…' : 'Enviar'}
+   708→   708→              </Button>
+   709→   709→            </div>
+   710→   710→          </CardContent>
+   711→   711→        </Card>
+   712→   712→      )}
+   713→   713→
+   714→   714→      {proposal.approvals && proposal.approvals.length > 0 && (
+   715→   715→        <Card>
+   716→   716→          <CardHeader className="pb-2">
+   717→   717→            <CardTitle className="text-base">Trazabilidad de aprobación</CardTitle>
+   718→   718→          </CardHeader>
+   719→   719→          <CardContent>
+   720→   720→            <ul className="space-y-2">
+   721→   721→              {proposal.approvals.map((a) => (
+   722→   722→                <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm rounded-md border px-3 py-2">
+   723→   723→                  <Badge variant="outline" className={a.decision === 'APROBADA' ? 'border-emerald-300 text-emerald-800 bg-emerald-50' : 'border-rose-300 text-rose-700 bg-rose-50'}>
+   724→   724→                    {a.decision === 'APROBADA' ? 'Aprobada' : 'Devuelta'}
+   725→   725→                  </Badge>
+   726→   726→                  <span><strong>{a.approver}</strong></span>
+   727→   727→                  <span className="text-muted-foreground">{fmtDateTime(a.createdAt)}</span>
+   728→   728→                  {a.notes && <span className="text-muted-foreground w-full">Notas: {a.notes}</span>}
+   729→   729→                </li>
+   730→   730→              ))}
+   731→   731→            </ul>
+   732→   732→          </CardContent>
+   733→   733→        </Card>
+   734→   734→      )}
+   735→   735→    </>
+   736→   736→  )
+   737→   737→}
+   738→   738→

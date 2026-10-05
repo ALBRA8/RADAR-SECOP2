@@ -16,6 +16,8 @@ export interface CompanyConfigData {
   requireKeywordHit: boolean
   capacity?: string | null
   approverName?: string | null
+  /** Palabras clave agregadas de los productos (derivadas, no persistidas en Company). */
+  productsKeywords?: string[]
 }
 
 export interface ProductItemData {
@@ -82,6 +84,24 @@ export interface AnalysisResult {
   risks: string[]
   nextAction: string
   engine: 'IA' | 'REGLAS'
+}
+
+// ─── Marco Lógico (especialidad del Modo Agente Proyectista) ──
+
+export interface MarcoLogicoFila {
+  nivel: string // Fin | Propósito | Componente N | Actividades
+  resumen: string
+  indicadores: string
+  mediosVerificacion: string
+  supuestos: string
+}
+
+export interface MarcoLogico {
+  problemaCentral: string
+  causas: string[]
+  efectos: string[]
+  objetivoCentral: string
+  filas: MarcoLogicoFila[]
 }
 
 // ─── Propuesta (MÓDULO G) ───────────────────────────────────

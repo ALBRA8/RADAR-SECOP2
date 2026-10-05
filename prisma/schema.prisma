@@ -176,6 +176,7 @@ model Proposal {
   status           String @default("BORRADOR") // BORRADOR | APROBADA
   sectionsJson     String @default("[]") // JSON: secciones del borrador
   checklistsJson   String @default("[]") // JSON: checklist de presentación
+  logicFrameworkJson String? // JSON: Marco Lógico (árbol de problemas + matriz Fin/Propósito/Componentes/Actividades)
   unconfirmedCount Int    @default(0)
   approvedBy       String?
   approvedAt       DateTime?
@@ -199,6 +200,39 @@ model ProposalMessage {
   sectionsAffected String @default("[]") // JSON: claves de secciones tocadas
 
   createdAt DateTime @default(now())
+}
+
+// ─── CANALES DE MENSAJERÍA (TELEGRAM / WHATSAPP / WEB) ───────
+
+model ChannelConfig {
+  id            String    @id @default(cuid())
+  channel       String    @unique // TELEGRAM | WHATSAPP
+  token         String    @default("") // bot token (Telegram) o access token permanente (WhatsApp Cloud API)
+  phoneNumberId String? // WhatsApp Cloud API: phone_number_id
+  verifyToken   String? // WhatsApp: token de verificación del webhook (hub.verify_token)
+  botUsername   String?
+  enabled       Boolean   @default(true)
+  lastOffset    String? // Telegram: offset de getUpdates (polling)
+  lastCheckAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model ChannelMessage {
+  id         String   @id @default(cuid())
+  channel    String // TELEGRAM | WHATSAPP | WEB
+  chatId     String
+  chatName   String?
+  direction  String // ENTRANTE | SALIENTE
+  type       String // TEXTO | VOZ | AUDIO | IMAGEN | VIDEO | DOCUMENTO | SISTEMA
+  text       String?
+  mediaPath  String?
+  mimeType   String?
+  transcript String? // transcripción ASR (voz/audio)
+  analysis   String? // análisis IA del medio (imagen/video/documento)
+  status     String   @default("RECIBIDO") // RECIBIDO | PROCESANDO | RESPONDIDO | ERROR
+  error      String?
+  createdAt  DateTime @default(now())
 }
 
 model Approval {

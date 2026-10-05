@@ -8,9 +8,11 @@ export function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status })
 }
 
-export async function safe<T>(fn: () => Promise<T>): Promise<NextResponse> {
+export async function safe<T>(fn: () => Promise<T>): Promise<NextResponse | Response> {
   try {
     const data = await fn()
+    // Si el handler devolvió una Response ya construida (p. ej. bad() o binarios), respétala tal cual.
+    if (data instanceof Response) return data
     return NextResponse.json(data as object)
   } catch (err) {
     console.error('[API]', err)

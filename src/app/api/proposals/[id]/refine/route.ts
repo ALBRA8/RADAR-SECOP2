@@ -1,7 +1,7 @@
 import { db } from '@/lib/db'
 import { safe, bad } from '@/lib/api'
-import { refineProposal } from '@/lib/ai'
-import { parseJsonArray, type CompanyConfigData, type DocumentData, type ExperienceData, type ProductItemData } from '@/lib/types'
+import { refineProposal, safeParseMarcoLogico } from '@/lib/ai'
+import { parseJsonArray, type ProposalSection, type CompanyConfigData, type DocumentData, type ExperienceData, type ProductItemData } from '@/lib/types'
 
 // MÓDULO G+ — Refinamiento conversacional de la propuesta (Modo Agente Proyectista)
 // Cada instrucción genera una nueva versión trazable + mensajes USUARIO/AGENTE persistentes.
@@ -65,7 +65,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       source: r.source as 'IA' | 'REGLA',
     }))
 
-    const currentSections = parseJsonArray(proposal.sectionsJson)
+    const currentSections = parseJsonArray<ProposalSection>(proposal.sectionsJson)
+    const currentMarcoLogico = safeParseMarcoLogico(proposal.logicFrameworkJson)
 
     // Historial conversacional previo (últimos 10 mensajes para contexto)
     const history = await db.proposalMessage.findMany({
@@ -82,6 +83,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       currentSections,
       instruction,
       historyItems,
+      currentMarcoLogico,
     )
     if (!result) {
       throw new Error('El motor IA no está disponible en este momento — intenta de nuevo en unos segundos')
@@ -93,6 +95,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       result.sections.filter((s) => s.unconfirmed).length +
       result.sections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
 
+    // Si la IA omitió el marco lógico en su respuesta, conserva el vigente (no se pierde la matriz)
+    const mlFinal = result.marcoLogico ?? currentMarcoLogico
     const newProposal = await db.proposal.create({
       data: {
         companyId: company.id,
@@ -101,6 +105,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         status: 'BORRADOR',
         sectionsJson: JSON.stringify(result.sections),
         checklistsJson: proposal.checklistsJson,
+        logicFrameworkJson: mlFinal ? JSON.stringify(mlFinal) : null,
         unconfirmedCount,
       },
     })
@@ -134,6 +139,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         ...newProposal,
         sections: result.sections,
         checklists: parseJsonArray(proposal.checklistsJson),
+        marcoLogico: mlFinal,
       },
       changeSummary: result.changeSummary,
       sectionsAffected: result.sectionsAffected,

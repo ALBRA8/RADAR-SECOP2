@@ -4,6 +4,9 @@
 // queda marcado como PENDIENTE / REQUIERE_REVISIÓN.
 
 import ZAI from 'z-ai-web-dev-sdk'
+
+/** Cliente tipado del SDK (el constructor es privado, se infiere de create()). */
+type ZaiClient = Awaited<ReturnType<typeof ZAI.create>>
 import type {
   AnalysisResult,
   CompanyConfigData,
@@ -12,15 +15,27 @@ import type {
   ProductItemData,
   ProposalSection,
   ChecklistGroup,
+  MarcoLogico,
+  MarcoLogicoFila,
   RawSecopRecord,
   RequirementItem,
   RequirementStatus,
 } from './types'
 import { parseJsonArray } from './types'
 
+/** Parsea el JSON serializado del Marco Lógico de forma tolerante (corrupto → null). */
+export function safeParseMarcoLogico(raw: string | null | undefined): MarcoLogico | null {
+  if (!raw) return null
+  try {
+    return normalizeMarcoLogico(JSON.parse(raw))
+  } catch {
+    return null
+  }
+}
+
 const VALID_STATUS: RequirementStatus[] = ['CUMPLE', 'NO_CUMPLE', 'PENDIENTE', 'REQUIERE_REVISION']
 
-async function getZai(): Promise<InstanceType<typeof ZAI> | null> {
+async function getZai(): Promise<ZaiClient | null> {
   try {
     return await ZAI.create()
   } catch {
@@ -28,19 +43,57 @@ async function getZai(): Promise<InstanceType<typeof ZAI> | null> {
   }
 }
 
-function extractJson(raw: string): Record<string, unknown> | null {
+export function extractJson(raw: string): Record<string, unknown> | null {
   if (!raw) return null
   let text = raw.trim()
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fence) text = fence[1].trim()
+  if (fence && fence[1].includes('{')) text = fence[1].trim()
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start === -1 || end === -1 || end <= start) return null
+  const body = text.slice(start, end + 1)
   try {
-    return JSON.parse(text.slice(start, end + 1))
+    return JSON.parse(body)
   } catch {
-    return null
+    // Reparación tolerante: los modelos suelen emitir saltos de línea literales
+    // dentro de los valores string (JSON inválido estricto). Estado in/out de string.
+    try {
+      return JSON.parse(repairControlChars(body))
+    } catch {
+      return null
+    }
   }
+}
+
+/** Escapa caracteres de control (saltos, tabs) que estén DENTRO de strings JSON. */
+function repairControlChars(s: string): string {
+  let out = ''
+  let inString = false
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (inString) {
+      if (ch === '\\') {
+        out += ch + (s[i + 1] ?? '')
+        i++
+        continue
+      }
+      if (ch === '"') {
+        inString = false
+        out += ch
+        continue
+      }
+      const code = ch.charCodeAt(0)
+      if (code < 0x20) {
+        out += code === 10 ? '\\n' : code === 13 ? '\\r' : code === 9 ? '\\t' : `\\u${code.toString(16).padStart(4, '0')}`
+        continue
+      }
+      out += ch
+    } else {
+      if (ch === '"') inString = true
+      out += ch
+    }
+  }
+  return out
 }
 
 interface CompanyBundle {
@@ -224,8 +277,36 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
 export interface ProposalDraft {
   sections: ProposalSection[]
   checklists: ChecklistGroup[]
+  marcoLogico: MarcoLogico | null
   unconfirmedCount: number
   engine: 'IA' | 'REGLAS'
+}
+
+/** Normaliza y sanea el Marco Lógico que devuelve la IA (tolerante a faltantes). */
+export function normalizeMarcoLogico(raw: unknown): MarcoLogico | null {
+  if (!raw || typeof raw !== 'object') return null
+  const m = raw as Record<string, unknown>
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 8) : []
+  const filas: MarcoLogicoFila[] = (Array.isArray(m.filas) ? (m.filas as Record<string, unknown>[]) : [])
+    .filter((f) => f && typeof f === 'object')
+    .map((f) => ({
+      nivel: String(f.nivel ?? '').trim().slice(0, 80),
+      resumen: String(f.resumen ?? '').trim().slice(0, 700),
+      indicadores: String(f.indicadores ?? '').trim().slice(0, 700),
+      mediosVerificacion: String(f.mediosVerificacion ?? '').trim().slice(0, 450),
+      supuestos: String(f.supuestos ?? '').trim().slice(0, 450),
+    }))
+    .filter((f) => f.nivel && (f.resumen || f.indicadores))
+    .slice(0, 12)
+  if (filas.length === 0) return null
+  return {
+    problemaCentral: String(m.problemaCentral ?? '').trim().slice(0, 700),
+    causas: strArr(m.causas),
+    efectos: strArr(m.efectos),
+    objetivoCentral: String(m.objetivoCentral ?? '').trim().slice(0, 700),
+    filas,
+  }
 }
 
 const DEEP_SECTION_SPEC = `1. "resumen_ejecutivo" — Resumen ejecutivo: 2-3 párrafos que presenten la comprensión de la necesidad, la solución propuesta y el diferencial de la empresa. Debe enganchar al evaluador en los primeros renglones.
@@ -239,6 +320,34 @@ const DEEP_SECTION_SPEC = `1. "resumen_ejecutivo" — Resumen ejecutivo: 2-3 pá
 9. "por_que_nosotros" — Por qué esta empresa: argumenta SOLO con la experiencia, productos/servicios y documentos registrados de la empresa, conectándolos explícitamente con el objeto. Si la evidencia es poca, sé honesto y enfatiza capacidad y enfoque, sin exagerar.
 10. "estructura_economica" — Estructura económica (plantilla): SIEMPRE "unconfirmed": true. Plantilla de tabla Concepto|Valor con [POR CONFIRMAR] en cada valor, más el presupuesto oficial de referencia y la advertencia de que el precio lo define la empresa.
 11. "anexos" — Anexos y documentos de la oferta: lista de anexos exigibles según el tipo de proceso y la matriz de requisitos, indicando cuáles ya están en el expediente y cuáles faltan.`
+
+// Especialista en Marco Lógico (llamada dedicada — metodología MEL/MML usada por entidades colombianas, DNP/MGA)
+const MARCO_LOGICO_SYSTEM = `Eres un ESPECIALISTA EN MARCO LÓGICO: metodología estándar de formulación de proyectos públicos en Colombia (matriz de marco lógico MML, árbol de problemas y de objetivos, lineamientos MGA del DNP).
+Tu tarea: construir el Marco Lógico de un proyecto-respuesta a un proceso de contratación pública SECOP II.
+
+REGLAS:
+1. El árbol de problemas se deriva del objeto y contexto del proceso. NO inventes datos de la empresa ni cifras de la entidad.
+2. Cada Componente de la matriz debe corresponder a una fase de la metodología del proyecto (te doy el plan de trabajo).
+3. Indicadores VERIFICABLES: fórmula + meta referencial. Medios de verificación concretos. Supuestos realistas.
+4. Español colombiano profesional.
+
+Devuelve EXCLUSIVAMENTE JSON válido:
+{
+  "narrativa": "2-3 párrafos: árbol de problemas (problema central, causas, efectos), su espejo en árbol de objetivos y cómo la matriz alinea la propuesta con la lógica de intervención. Si el tipo de proceso suele exigir marco lógico en el pliego (obra, intervención social, educación, salud, cooperación, planes de desarrollo), dilo explícitamente.",
+  "marcoLogico": {
+    "problemaCentral": "...",
+    "causas": ["causa 1", "causa 2", "causa 3"],
+    "efectos": ["efecto 1", "efecto 2", "efecto 3"],
+    "objetivoCentral": "...",
+    "filas": [
+      { "nivel": "Fin", "resumen": "...", "indicadores": "...", "mediosVerificacion": "...", "supuestos": "..." },
+      { "nivel": "Propósito", "resumen": "...", "indicadores": "...", "mediosVerificacion": "...", "supuestos": "..." },
+      { "nivel": "Componente 1: [nombre]", "resumen": "...", "indicadores": "...", "mediosVerificacion": "...", "supuestos": "..." },
+      { "nivel": "Componente 2: [nombre]", "resumen": "...", "indicadores": "...", "mediosVerificacion": "...", "supuestos": "..." },
+      { "nivel": "Actividades", "resumen": "actividades clave por componente", "indicadores": "insumos/presupuesto", "mediosVerificacion": "registros de ejecución", "supuestos": "..." }
+    ]
+  }
+}`
 
 export async function generateProposal(
   rec: RawSecopRecord,
@@ -263,6 +372,7 @@ REGLAS ABSOLUTAS — NO NEGOCIABLES:
 3. Cuando la propuesta necesite un dato que la empresa no tiene registrado, escribe literalmente [POR CONFIRMAR: qué dato falta] y marca la sección con "unconfirmed": true.
 4. NO propongas valores económicos: la estructura económica queda como plantilla para que la empresa la diligencie.
 5. Escribe en español colombiano profesional, con concreción (nada de relleno genérico). Cada párrafo debe aportar información.
+6. Responde en formato compacto: máximo 130 palabras por sección. El detalle fino va en la sección de metodología e indicadores, no en disertaciones.
 
 Devuelve EXCLUSIVAMENTE JSON válido con esta estructura:
 {
@@ -284,6 +394,8 @@ Devuelve EXCLUSIVAMENTE JSON válido con esta estructura:
     { "group": "Antes de enviar", "items": [ { "label": "...", "required": true } ] }
   ]
 }
+
+(OJO: el Marco Lógico NO va en esta respuesta — se genera en una llamada especializada aparte.)
 
 ESPECIFICACIÓN DE CADA SECCIÓN:
 ${DEEP_SECTION_SPEC}`
@@ -336,15 +448,70 @@ Diseña el proyecto completo siguiendo la estructura JSON indicada.`
                 : [],
             }))
           : []
+
+        // ── Llamada 2: MARCO LÓGICO especializado (evita truncamiento de una sola respuesta) ──
+        let marcoLogico: MarcoLogico | null = null
+        let mlNarrativa = ''
+        try {
+          const metodologia = sections.find((s) => s.key === 'metodologia')?.content || ''
+          const mlRes = await zai.chat.completions.create({
+            messages: [
+              { role: 'system', content: MARCO_LOGICO_SYSTEM },
+              {
+                role: 'user',
+                content: `PROCESO SECOP II:
+ID: ${rec.id} | Entidad: ${rec.entity}
+Objeto: ${rec.objectName}
+Descripción publicada: ${rec.description || '(no publicada)'}
+Duración: ${rec.duration || 'n/d'} ${rec.durationUnit || ''} | Lugar: ${rec.city || 'n/d'} / ${rec.department || 'n/d'}
+
+${companyBlock(bundle)}
+
+METODOLOGÍA DEL PROYECTO (los componentes de la matriz deben corresponder a estas fases):
+${metodologia.slice(0, 2500)}
+
+MATRIZ DE REQUISITOS:
+${reqBlock}
+
+Construye el Marco Lógico y devuelve el JSON indicado.`,
+              },
+            ],
+            thinking: { type: 'disabled' },
+            temperature: 0.3,
+          })
+          const mlParsed = extractJson(mlRes?.choices?.[0]?.message?.content ?? '')
+          if (mlParsed) {
+            marcoLogico = normalizeMarcoLogico(mlParsed.marcoLogico)
+            mlNarrativa = String(mlParsed.narrativa || '').trim().slice(0, 3000)
+          }
+        } catch (err) {
+          console.error('[ai] generateProposal: llamada de marco lógico falló —', err instanceof Error ? err.message : err)
+        }
+        if (!marcoLogico) {
+          console.error('[ai] generateProposal: marco lógico IA no disponible — usa plantilla neutra')
+          marcoLogico = templateProposal(rec, bundle, requirements).marcoLogico
+        }
+
+        const mlSection: ProposalSection = {
+          key: 'marco_logico',
+          title: `12. Marco lógico`,
+          content: mlNarrativa || '⚠ La narrativa del marco lógico no pudo generarse con el motor IA. Usa la matriz estructurada de la tarjeta dedicada y valídala contra el pliego antes de presentar.',
+          unconfirmed: !mlNarrativa,
+        }
+        const allSections = [...sections, mlSection]
+
         const unconfirmedCount =
-          sections.filter((s) => s.unconfirmed).length +
-          sections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
-        return { sections, checklists, unconfirmedCount, engine: 'IA' }
+          allSections.filter((s) => s.unconfirmed).length +
+          allSections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
+        return { sections: allSections, checklists, marcoLogico, unconfirmedCount, engine: 'IA' }
       }
+      console.error('[ai] generateProposal: respuesta IA sin JSON válido/sections vacías — cae a plantilla. Longitud cruda:', content.length, 'inicio:', JSON.stringify(content.slice(0, 120)), 'fin:', JSON.stringify(content.slice(-120)))
     } catch (err) {
       console.error('[ai] generateProposal: motor IA falló, cae a plantilla —', err instanceof Error ? err.message : err)
       // cae a plantilla
     }
+  } else {
+    console.error('[ai] generateProposal: sin motor IA (ZAI.create falló) — cae a plantilla')
   }
   return templateProposal(rec, bundle, requirements)
 }
@@ -353,6 +520,7 @@ Diseña el proyecto completo siguiendo la estructura JSON indicada.`
 
 export interface RefinementResult {
   sections: ProposalSection[]
+  marcoLogico: MarcoLogico | null
   changeSummary: string
   sectionsAffected: string[]
   engine: 'IA'
@@ -366,6 +534,7 @@ export async function refineProposal(
   currentSections: ProposalSection[],
   instruction: string,
   history: { role: string; content: string }[],
+  currentMarcoLogico?: MarcoLogico | null,
 ): Promise<RefinementResult | null> {
   const zai = await getZai()
   if (!zai) return null
@@ -376,13 +545,14 @@ export async function refineProposal(
 REGLAS ABSOLUTAS — NO NEGOCIABLES:
 1. NUNCA inventes experiencia, contratos, certificaciones, capacidades, precios, cifras económicas, firmas, documentos, nombres de personas ni declaraciones.
 2. Usa ÚNICAMENTE la información registrada de la empresa. Si la instrucción pide un dato que no está registrado, escribe [POR CONFIRMAR: qué dato falta].
-3. Aplica la instrucción del usuario con precisión; el resto del proyecto debe quedar consistente con el cambio (si cambias la metodología, ajusta cronograma/indicadores si aplica).
+3. Aplica la instrucción del usuario con precisión; el resto del proyecto debe quedar consistente con el cambio (si cambias la metodología, ajusta cronograma/indicadores/marco lógico si aplica).
 4. NO degrades otras secciones: conserva su nivel de detalle y su evidencia.
-5. Devuelve SIEMPRE el proyecto completo (las 11 secciones), no solo las tocadas.
+5. Devuelve SIEMPRE el proyecto completo (las 12 secciones) Y el marco lógico actualizado; no solo lo tocado.
 
 Devuelve EXCLUSIVAMENTE JSON válido:
 {
   "sections": [ { "key": "...", "title": "...", "content": "...", "unconfirmed": false } ],
+  "marcoLogico": { "problemaCentral": "...", "causas": ["..."], "efectos": ["..."], "objetivoCentral": "...", "filas": [ { "nivel": "Fin", "resumen": "...", "indicadores": "...", "mediosVerificacion": "...", "supuestos": "..." } ] },
   "changeSummary": "resumen en 1-3 frases de qué cambió y por qué",
   "sectionsAffected": ["metodologia", "cronograma"]
 }`
@@ -390,6 +560,13 @@ Devuelve EXCLUSIVAMENTE JSON válido:
     const current = currentSections
       .map((s) => `### ${s.title} (key: ${s.key}${s.unconfirmed ? ' — contiene [POR CONFIRMAR]' : ''})\n${s.content}`)
       .join('\n\n')
+
+    const currentML = currentMarcoLogico
+      ? `MATRIZ DE MARCO LÓGICO VIGENTE:
+Problema central: ${currentMarcoLogico.problemaCentral}
+Objetivo central: ${currentMarcoLogico.objetivoCentral}
+${currentMarcoLogico.filas.map((f) => `- ${f.nivel}: ${f.resumen} | Indicadores: ${f.indicadores} | Medios: ${f.mediosVerificacion} | Supuestos: ${f.supuestos}`).join('\n')}`
+      : '(sin marco lógico previo — inclúyelo)'
 
     const historyBlock = history.length
       ? history.map((m) => `${m.role === 'USUARIO' ? 'Usuario' : 'Agente'}: ${m.content}`).join('\n')
@@ -410,6 +587,8 @@ ${reqBlock}
 CONVERSACIÓN PREVIA:
 ${historyBlock}
 
+${currentML}
+
 BORRADOR ACTUAL COMPLETO:
 ${current}
 
@@ -418,18 +597,41 @@ INSTRUCCIÓN NUEVA DEL USUARIO:
 
 Aplica la instrucción y devuelve el JSON del proyecto completo actualizado.`
 
-    const res = await zai.chat.completions.create({
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
+    const baseMessages: { role: 'system' | 'user'; content: string }[] = [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ]
+
+    let res = await zai.chat.completions.create({
+      messages: baseMessages,
       thinking: { type: 'disabled' },
       temperature: 0.35,
     })
 
-    const content: string = res?.choices?.[0]?.message?.content ?? ''
-    const parsed = extractJson(content)
-    if (!parsed || !Array.isArray(parsed.sections) || parsed.sections.length === 0) return null
+    let content: string = res?.choices?.[0]?.message?.content ?? ''
+    let parsed = extractJson(content)
+    if ((!parsed || !Array.isArray(parsed.sections) || parsed.sections.length === 0) && content.length > 0) {
+      // Probable truncamiento por longitud: reintento una vez en modo compacto
+      console.error('[ai] refineProposal: respuesta inválida (', content.length, 'chars) — reintento compacto')
+      res = await zai.chat.completions.create({
+        messages: [
+          ...baseMessages,
+          {
+            role: 'user',
+            content:
+              'IMPORTANTE: tu respuesta anterior se perdió o quedó incompleta. Responde de nuevo el JSON COMPLETO en versión COMPACTA: máximo 90 palabras por sección, sin repeticiones, conservando TODAS las secciones del borrador y el marco lógico.',
+          },
+        ],
+        thinking: { type: 'disabled' },
+        temperature: 0.3,
+      })
+      content = res?.choices?.[0]?.message?.content ?? ''
+      parsed = extractJson(content)
+    }
+    if (!parsed || !Array.isArray(parsed.sections) || parsed.sections.length === 0) {
+      console.error('[ai] refineProposal: respuesta sin JSON válido tras reintento — descartada. Longitud cruda:', content.length, 'inicio:', JSON.stringify(content.slice(0, 160)), 'fin:', JSON.stringify(content.slice(-160)))
+      return null
+    }
 
     const sections: ProposalSection[] = (parsed.sections as Record<string, unknown>[]).map((s, i) => ({
       key: String(s.key || `seccion_${i + 1}`),
@@ -440,11 +642,13 @@ Aplica la instrucción y devuelve el JSON del proyecto completo actualizado.`
 
     return {
       sections,
+      marcoLogico: normalizeMarcoLogico(parsed.marcoLogico),
       changeSummary: String(parsed.changeSummary || 'Propuesta actualizada según la instrucción.').slice(0, 800),
       sectionsAffected: Array.isArray(parsed.sectionsAffected) ? parsed.sectionsAffected.map(String).slice(0, 12) : [],
       engine: 'IA',
     }
-  } catch {
+  } catch (err) {
+    console.error('[ai] refineProposal: falló el motor IA —', err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -490,6 +694,18 @@ export function templateProposal(rec: RawSecopRecord, bundle: CompanyBundle, req
         .join('\n') || 'Sin anexos pendientes según la matriz de requisitos.',
       unconfirmed: false,
     },
+    {
+      key: 'marco_logico',
+      title: '6. Marco lógico (plantilla)',
+      content: `⚠ PLANTILLA GENERADA SIN MOTOR IA — el árbol de problemas y la matriz deben validarse con el pliego.
+
+Problema central identificado en el objeto: ${rec.objectName}
+Árbol de problemas: [POR CONFIRMAR: causas y efectos con la comunidad/entidad]
+Árbol de objetivos: [POR CONFIRMAR: objetivos espejo de las causas]
+
+Matriz de marco lógico: completa la fila de cada nivel (Fin, Propósito, Componentes, Actividades) con indicadores verificables, medios de verificación y supuestos, coherentes con el plan de trabajo.`,
+      unconfirmed: true,
+    },
   ]
 
   const checklists: ChecklistGroup[] = [
@@ -514,8 +730,21 @@ export function templateProposal(rec: RawSecopRecord, bundle: CompanyBundle, req
     },
   ]
 
+  const marcoLogico: MarcoLogico = {
+    problemaCentral: rec.objectName.slice(0, 600),
+    causas: ['[POR CONFIRMAR: causas del problema]'],
+    efectos: ['[POR CONFIRMAR: efectos del problema]'],
+    objetivoCentral: `Atender el objeto del proceso ${rec.id}: ${rec.objectName.slice(0, 400)}`,
+    filas: [
+      { nivel: 'Fin', resumen: '[POR CONFIRMAR: contribución de largo plazo]', indicadores: '[POR CONFIRMAR]', mediosVerificacion: '[POR CONFIRMAR]', supuestos: '[POR CONFIRMAR]' },
+      { nivel: 'Propósito', resumen: '[POR CONFIRMAR: efecto directo esperado]', indicadores: '[POR CONFIRMAR]', mediosVerificacion: '[POR CONFIRMAR]', supuestos: '[POR CONFIRMAR]' },
+      { nivel: 'Componente 1', resumen: '[POR CONFIRMAR: primer producto/entregable]', indicadores: '[POR CONFIRMAR]', mediosVerificacion: '[POR CONFIRMAR]', supuestos: '[POR CONFIRMAR]' },
+      { nivel: 'Actividades', resumen: '[POR CONFIRMAR: actividades por componente]', indicadores: '[POR CONFIRMAR]', mediosVerificacion: '[POR CONFIRMAR]', supuestos: '[POR CONFIRMAR]' },
+    ],
+  }
+
   const unconfirmedCount = sections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
-  return { sections, checklists, unconfirmedCount, engine: 'REGLAS' }
+  return { sections, checklists, marcoLogico, unconfirmedCount, engine: 'REGLAS' }
 }
 
 export { parseJsonArray }

@@ -69,6 +69,7 @@ export async function POST(req: Request) {
         status: 'BORRADOR',
         sectionsJson: JSON.stringify(draft.sections),
         checklistsJson: JSON.stringify(draft.checklists),
+        logicFrameworkJson: draft.marcoLogico ? JSON.stringify(draft.marcoLogico) : null,
         unconfirmedCount: draft.unconfirmedCount,
       },
     })
@@ -78,10 +79,10 @@ export async function POST(req: Request) {
         action: 'GENERAR_PROPUESTA',
         entityType: 'Proposal',
         entityId: proposal.id,
-        detail: `Versión ${version} generada con motor ${draft.engine}. ${draft.unconfirmedCount} dato(s) marcado(s) por confirmar.`,
+        detail: `Versión ${version} generada con motor ${draft.engine}. ${draft.unconfirmedCount} dato(s) marcado(s) por confirmar.${draft.marcoLogico ? ' Incluye marco lógico.' : ''}`,
       },
     })
 
-    return { proposal: { ...proposal, sections: draft.sections, checklists: draft.checklists }, engine: draft.engine }
+    return { proposal: { ...proposal, sections: draft.sections, checklists: draft.checklists, marcoLogico: draft.marcoLogico }, engine: draft.engine }
   })
 }

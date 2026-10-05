@@ -8,13 +8,12 @@ import { OpportunityDetailView } from '@/components/app/detail'
 import { CompanyView } from '@/components/app/company'
 import { AlertsView } from '@/components/app/alerts'
 import { IntegrationsView } from '@/components/app/integrations'
+import { ChannelsView } from '@/components/app/channels'
 import {
-  type OpportunityData,
-  type CompanyProfile,
-  type NotificationData,
   parseJsonArraySafe,
   normalizeOpp,
 } from '@/components/app/client-helpers'
+import type { OpportunityData, CompanyProfile, NotificationData } from '@/components/app/client-types'
 
 interface DashboardPayload {
   company: { id: string; name: string } | null
@@ -24,10 +23,10 @@ interface DashboardPayload {
   alerts: NotificationData[]
   lastSync: { at: string; detail: string } | null
 }
-import { Radar, LayoutDashboard, Inbox, Building2, Bell, ShieldCheck, Plug } from 'lucide-react'
+import { Radar, LayoutDashboard, Inbox, Building2, Bell, ShieldCheck, Plug, MessageCircleMore } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
-type View = 'dashboard' | 'oportunidades' | 'detalle' | 'empresa' | 'alertas' | 'integraciones'
+type View = 'dashboard' | 'oportunidades' | 'detalle' | 'empresa' | 'alertas' | 'integraciones' | 'canales'
 
 export default function Home() {
   const { toast } = useToast()
@@ -123,7 +122,7 @@ export default function Home() {
     try {
       const res = await fetch(`/api/opportunities/${id}`)
       const data = await res.json()
-      if (data.opportunity) setDetail(normalizeOpp(data.opportunity, true))
+      if (data.opportunity) setDetail(normalizeOpp(data.opportunity))
       else setDetail(null)
     } catch {
       setDetail(null)
@@ -263,13 +262,23 @@ export default function Home() {
   }
 
   const handleMarkAllRead = async () => {
-    await fetch('/api/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'markAllRead' }) })
-    loadAlerts()
+    try {
+      const res = await fetch('/api/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'markAllRead' }) })
+      if (!res.ok) throw new Error()
+      loadAlerts()
+    } catch {
+      toast({ title: 'No se pudieron marcar las alertas como leídas', variant: 'destructive' })
+    }
   }
 
   const handleMarkRead = async (id: string) => {
-    await fetch('/api/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'markRead', id }) })
-    loadAlerts()
+    try {
+      const res = await fetch('/api/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'markRead', id }) })
+      if (!res.ok) throw new Error()
+      loadAlerts()
+    } catch {
+      toast({ title: 'No se pudo marcar la alerta como leída', variant: 'destructive' })
+    }
   }
 
   // ─── Navegación ─────────────────────────────────────────────
@@ -278,6 +287,7 @@ export default function Home() {
     { key: 'oportunidades', label: 'Oportunidades', icon: Inbox, badge: opportunities.filter((o) => o.status !== 'DESCARTADA').length },
     { key: 'empresa', label: 'Mi Empresa', icon: Building2 },
     { key: 'alertas', label: 'Alertas', icon: Bell, badge: unread },
+    { key: 'canales', label: 'Canales', icon: MessageCircleMore },
     { key: 'integraciones', label: 'Integraciones', icon: Plug },
   ]
 
@@ -365,6 +375,7 @@ export default function Home() {
           />
         )}
         {view === 'integraciones' && <IntegrationsView />}
+        {view === 'canales' && <ChannelsView />}
       </main>
 
       {/* Pie pegado al fondo */}

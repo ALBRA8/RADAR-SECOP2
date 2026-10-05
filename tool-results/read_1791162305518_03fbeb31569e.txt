@@ -1,0 +1,596 @@
+     1→// MÓDULO MCP — Servidor Model Context Protocol del Agente SECOP Radar
+     2→// Permite que otros proyectos/agentes (Claude Desktop, n8n, scripts, otros MCP clients)
+     3→// consuman las capacidades del agente vía JSON-RPC 2.0 sobre Streamable HTTP (/api/mcp).
+     4→//
+     5→// REGLA CRÍTICA heredada del Módulo G: ninguna tool inventa datos de la empresa.
+     6→// Las acciones de escritura exigen el mismo flujo de aprobación humana que la UI.
+     7→
+     8→import { db } from '@/lib/db'
+     9→import { analyzeOpportunity, generateProposal, refineProposal } from '@/lib/ai'
+    10→import { runSync } from '@/lib/sync'
+    11→import { parseJsonArray, type CompanyConfigData, type DocumentData, type ExperienceData, type ProductItemData } from '@/lib/types'
+    12→
+    13→export const MCP_PROTOCOL_VERSION = '2025-06-18'
+    14→export const MCP_SERVER_INFO = {
+    15→  name: 'secop-radar-mcp',
+    16→  title: 'SECOP Radar — Agente de oportunidades SECOP II',
+    17→  version: '1.0.0',
+    18→}
+    19→
+    20→// ─── JSON-RPC 2.0 ────────────────────────────────────────────
+    21→
+    22→export interface JsonRpcMessage {
+    23→  jsonrpc?: string
+    24→  id?: string | number | null
+    25→  method?: string
+    26→  params?: Record<string, unknown>
+    27→  result?: unknown
+    28→  error?: { code: number; message: string; data?: unknown }
+    29→}
+    30→
+    31→const ERR = {
+    32→  PARSE: { code: -32700, message: 'Error de parseo JSON' },
+    33→  REQUEST: { code: -32600, message: 'Request JSON-RPC inválido' },
+    34→  METHOD: { code: -32601, message: 'Método no encontrado' },
+    35→  PARAMS: { code: -32602, message: 'Parámetros inválidos' },
+    36→  INTERNAL: { code: -32603, message: 'Error interno' },
+    37→}
+    38→
+    39→function rpcResult(id: JsonRpcMessage['id'], result: Record<string, unknown>) {
+    40→  return { jsonrpc: '2.0', id, result }
+    41→}
+    42→
+    43→function rpcError(id: JsonRpcMessage['id'], err: { code: number; message: string }, data?: unknown) {
+    44→  return { jsonrpc: '2.0', id, error: { ...err, ...(data !== undefined ? { data } : {}) } }
+    45→}
+    46→
+    47→// ─── Helpers de dominio (compartidos por las tools) ──────────
+    48→
+    49→interface CompanyRow {
+    50→  id: string
+    51→  name: string
+    52→  nit: string | null
+    53→  description: string | null
+    54→  city: string | null
+    55→  department: string | null
+    56→  minBudget: number
+    57→  maxBudget: number
+    58→  departmentsAllowed: string
+    59→  modalitiesAllowed: string
+    60→  contractTypesAllowed: string
+    61→  phasesAllowed: string
+    62→  requireKeywordHit: boolean
+    63→  capacity: string | null
+    64→  approverName: string | null
+    65→  products: { id: string; name: string; description: string | null; category: string | null; keywords: string }[]
+    66→  experiences: { id: string; title: string; entity: string | null; year: number | null; value: number | null; description: string | null }[]
+    67→  documents: { id: string; name: string; docType: string | null; status: string; notes: string | null }[]
+    68→}
+    69→
+    70→function buildBundle(company: CompanyRow) {
+    71→  return {
+    72→    company: {
+    73→      id: company.id,
+    74→      name: company.name,
+    75→      nit: company.nit,
+    76→      description: company.description,
+    77→      city: company.city,
+    78→      department: company.department,
+    79→      minBudget: company.minBudget,
+    80→      maxBudget: company.maxBudget,
+    81→      departmentsAllowed: parseJsonArray(company.departmentsAllowed),
+    82→      modalitiesAllowed: parseJsonArray(company.modalitiesAllowed),
+    83→      contractTypesAllowed: parseJsonArray(company.contractTypesAllowed),
+    84→      phasesAllowed: parseJsonArray(company.phasesAllowed),
+    85→      requireKeywordHit: company.requireKeywordHit,
+    86→      capacity: company.capacity,
+    87→      approverName: company.approverName,
+    88→    } as CompanyConfigData,
+    89→    products: company.products.map((p) => ({ id: p.id, name: p.name, description: p.description, category: p.category, keywords: parseJsonArray(p.keywords) })) as ProductItemData[],
+    90→    experiences: company.experiences.map((e) => ({ id: e.id, title: e.title, entity: e.entity, year: e.year, value: e.value, description: e.description })) as ExperienceData[],
+    91→    documents: company.documents.map((d) => ({ id: d.id, name: d.name, docType: d.docType, status: d.status, notes: d.notes })) as DocumentData[],
+    92→  }
+    93→}
+    94→
+    95→function mapRequirements(reqs: { code: string; description: string; status: string; evidence: string | null; action: string | null; source: string }[]) {
+    96→  return reqs.map((r) => ({
+    97→    code: r.code,
+    98→    description: r.description,
+    99→    status: r.status as 'CUMPLE' | 'NO_CUMPLE' | 'PENDIENTE' | 'REQUIERE_REVISION',
+   100→    evidence: r.evidence ?? undefined,
+   101→    action: r.action ?? undefined,
+   102→    source: r.source as 'IA' | 'REGLA',
+   103→  }))
+   104→}
+   105→
+   106→function compactProcess(p: { id: string; entity: string; objectName: string; description: string | null; basePrice: number | null; modality: string | null; contractType: string | null; phase: string | null; state: string | null; duration: string | null; durationUnit: string | null; department: string | null; city: string | null; receptionDate: Date | null; url: string | null }) {
+   107→  return {
+   108→    id: p.id,
+   109→    entidad: p.entity,
+   110→    objeto: p.objectName,
+   111→    descripcion: p.description,
+   112→    valor_base_cop: p.basePrice,
+   113→    modalidad: p.modality,
+   114→    tipo_contrato: p.contractType,
+   115→    fase: p.phase,
+   116→    estado: p.state,
+   117→    duracion: p.duration ? `${p.duration} ${p.durationUnit || ''}`.trim() : null,
+   118→    ubicacion: [p.city, p.department].filter(Boolean).join(' / ') || null,
+   119→    fecha_limite_aprox: p.receptionDate,
+   120→    url: p.url,
+   121→  }
+   122→}
+   123→
+   124→async function firstCompany() {
+   125→  return db.company.findFirst({
+   126→    orderBy: { createdAt: 'asc' },
+   127→    include: { products: true, experiences: true, documents: true },
+   128→  })
+   129→}
+   130→
+   131→// ─── Registro de tools ───────────────────────────────────────
+   132→
+   133→interface ToolDef {
+   134→  description: string
+   135→  inputSchema: Record<string, unknown>
+   136→  write?: boolean // herramienta que muta estado (exige flujo de aprobación vigente)
+   137→  handler: (args: Record<string, unknown>) => Promise<unknown>
+   138→}
+   139→
+   140→function str(v: unknown, fallback = ''): string {
+   141→  return typeof v === 'string' ? v : fallback
+   142→}
+   143→function num(v: unknown): number | undefined {
+   144→  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+   145→}
+   146→
+   147→export const MCP_TOOLS: Record<string, ToolDef> = {
+   148→  list_opportunities: {
+   149→    description:
+   150→      'Lista las oportunidades SECOP II detectadas para la empresa, con estado, compatibilidad (score), entidad, objeto, valor y fecha límite aproximada. Filtro opcional por estado.',
+   151→    inputSchema: {
+   152→      type: 'object',
+   153→      properties: {
+   154→        status: { type: 'string', enum: ['NUEVA', 'EN_ANALISIS', 'COMPATIBLE', 'APROBADA_PREPARACION', 'DESCARTADA'], description: 'Filtrar por estado de la oportunidad' },
+   155→        limit: { type: 'number', maximum: 50, default: 20, description: 'Máximo de resultados (1-50)' },
+   156→      },
+   157→    },
+   158→    handler: async (args) => {
+   159→      const limit = Math.min(Math.max(num(args.limit) ?? 20, 1), 50)
+   160→      const status = str(args.status) || undefined
+   161→      const opps = await db.opportunity.findMany({
+   162→        where: status ? { status } : undefined,
+   163→        include: { process: true },
+   164→        orderBy: [{ score: 'desc' }, { createdAt: 'desc' }],
+   165→        take: limit,
+   166→      })
+   167→      return {
+   168→        total: opps.length,
+   169→        oportunidades: opps.map((o) => ({
+   170→          opportunityId: o.id,
+   171→          proceso: compactProcess(o.process),
+   172→          estado_oportunidad: o.status,
+   173→          compatibilidad: o.score,
+   174→          resumen_analisis: o.analysisSummary,
+   175→          siguiente_accion: o.nextAction,
+   176→        })),
+   177→      }
+   178→    },
+   179→  },
+   180→
+   181→  get_opportunity: {
+   182→    description:
+   183→      'Expediente completo de una oportunidad: datos del proceso SECOP, matriz de requisitos (estado/evidencia/acción), riesgos, documentos faltantes y la propuesta más reciente con sus secciones.',
+   184→    inputSchema: {
+   185→      type: 'object',
+   186→      properties: { opportunityId: { type: 'string', description: 'ID de la oportunidad (lo entrega list_opportunities)' } },
+   187→      required: ['opportunityId'],
+   188→    },
+   189→    handler: async (args) => {
+   190→      const id = str(args.opportunityId)
+   191→      if (!id) throw new Error('opportunityId es obligatorio')
+   192→      const opp = await db.opportunity.findUnique({
+   193→        where: { id },
+   194→        include: {
+   195→          process: true,
+   196→          requirements: { orderBy: { code: 'asc' } },
+   197→          proposals: { orderBy: { version: 'desc' }, take: 1 },
+   198→        },
+   199→      })
+   200→      if (!opp) throw new Error('Oportunidad no encontrada')
+   201→      const latest = opp.proposals[0]
+   202→      return {
+   203→        opportunityId: opp.id,
+   204→        estado: opp.status,
+   205→        compatibilidad: opp.score,
+   206→        proceso: compactProcess(opp.process),
+   207→        resumen_analisis: opp.analysisSummary,
+   208→        matriz_requisitos: opp.requirements.map((r) => ({ codigo: r.code, requisito: r.description, estado: r.status, evidencia: r.evidence, accion: r.action })),
+   209→        riesgos: parseJsonArray(opp.risksJson),
+   210→        documentos_faltantes: parseJsonArray(opp.missingDocsJson),
+   211→        siguiente_accion: opp.nextAction,
+   212→        propuesta_reciente: latest
+   213→          ? { proposalId: latest.id, version: latest.version, estado: latest.status, secciones: parseJsonArray(latest.sectionsJson), marcadores_por_confirmar: latest.unconfirmedCount }
+   214→          : null,
+   215→      }
+   216→    },
+   217→  },
+   218→
+   219→  search_opportunities: {
+   220→    description:
+   221→      'Busca oportunidades SECOP II por texto libre (objeto/descripción) y rango de valor. Devuelve coincidencias con su compatibilidad para la empresa.',
+   222→    inputSchema: {
+   223→      type: 'object',
+   224→      properties: {
+   225→        query: { type: 'string', description: 'Texto a buscar en el objeto o descripción del proceso' },
+   226→        minValue: { type: 'number', description: 'Valor mínimo en COP' },
+   227→        maxValue: { type: 'number', description: 'Valor máximo en COP' },
+   228→        limit: { type: 'number', maximum: 50, default: 20 },
+   229→      },
+   230→    },
+   231→    handler: async (args) => {
+   232→      const limit = Math.min(Math.max(num(args.limit) ?? 20, 1), 50)
+   233→      const query = str(args.query).trim()
+   234→      const minValue = num(args.minValue)
+   235→      const maxValue = num(args.maxValue)
+   236→      const opps = await db.opportunity.findMany({
+   237→        where: {
+   238→          AND: [
+   239→            { status: { not: 'DESCARTADA' } },
+   240→            ...(query
+   241→              ? {
+   242→                  process: {
+   243→                    OR: [
+   244→                      { objectName: { contains: query } },
+   245→                      { description: { contains: query } },
+   246→                      { entity: { contains: query } },
+   247→                    ],
+   248→                  },
+   249→                }
+   250→              : {}),
+   251→            ...(minValue != null || maxValue != null
+   252→              ? { process: { basePrice: { ...(minValue != null ? { gte: minValue } : {}), ...(maxValue != null ? { lte: maxValue } : {}) } } }
+   253→              : {}),
+   254→          ],
+   255→        },
+   256→        include: { process: true },
+   257→        orderBy: { score: 'desc' },
+   258→        take: limit,
+   259→      })
+   260→      return { total: opps.length, resultados: opps.map((o) => ({ opportunityId: o.id, compatibilidad: o.score, estado: o.status, proceso: compactProcess(o.process) })) }
+   261→    },
+   262→  },
+   263→
+   264→  analyze_opportunity: {
+   265→    description:
+   266→      'Ejecuta el análisis inteligente (Módulo D) sobre una oportunidad: la IA lee el proceso SECOP, extrae requisitos y construye la matriz REQUISITO|ESTADO|EVIDENCIA|ACCIÓN usando solo la evidencia registrada de la empresa.',
+   267→    inputSchema: {
+   268→      type: 'object',
+   269→      properties: { opportunityId: { type: 'string' } },
+   270→      required: ['opportunityId'],
+   271→    },
+   272→    write: true,
+   273→    handler: async (args) => {
+   274→      const id = str(args.opportunityId)
+   275→      if (!id) throw new Error('opportunityId es obligatorio')
+   276→      const opp = await db.opportunity.findUnique({ where: { id }, include: { process: true, company: { include: { products: true, experiences: true, documents: true } } } })
+   277→      if (!opp) throw new Error('Oportunidad no encontrada')
+   278→      if (opp.status === 'DESCARTADA') throw new Error('La oportunidad está descartada')
+   279→
+   280→      await db.opportunity.update({ where: { id }, data: { status: 'EN_ANALISIS' } })
+   281→      const analysis = await analyzeOpportunity(opp.process, buildBundle(opp.company))
+   282→
+   283→      await db.requirement.deleteMany({ where: { opportunityId: id } })
+   284→      await db.requirement.createMany({
+   285→        data: analysis.requirements.map((r) => ({
+   286→          opportunityId: id,
+   287→          code: r.code,
+   288→          description: r.description,
+   289→          status: r.status,
+   290→          evidence: r.evidence ?? null,
+   291→          action: r.action ?? null,
+   292→          source: r.source ?? 'IA',
+   293→        })),
+   294→      })
+   295→
+   296→      const unmet = analysis.requirements.filter((r) => r.status === 'NO_CUMPLE')
+   297→      await db.opportunity.update({
+   298→        where: { id },
+   299→        data: {
+   300→          status: 'COMPATIBLE',
+   301→          analysisSummary: analysis.summary,
+   302→          nextAction: analysis.nextAction,
+   303→          risksJson: JSON.stringify([...analysis.risks]),
+   304→          missingDocsJson: JSON.stringify([...analysis.missingDocs]),
+   305→          score: unmet.length > 0 ? Math.max(5, opp.score - unmet.length * 8) : opp.score,
+   306→        },
+   307→      })
+   308→
+   309→      await db.auditEvent.create({
+   310→        data: { action: 'ANALIZAR_OPORTUNIDAD', entityType: 'Opportunity', entityId: id, detail: `Análisis con motor ${analysis.engine} vía MCP: ${analysis.requirements.length} requisitos evaluados` },
+   311→      })
+   312→
+   313→      return {
+   314→        engine: analysis.engine,
+   315→        resumen: analysis.summary,
+   316→        matriz_requisitos: analysis.requirements,
+   317→        documentos_faltantes: analysis.missingDocs,
+   318→        riesgos: analysis.risks,
+   319→        siguiente_accion: analysis.nextAction,
+   320→      }
+   321→    },
+   322→  },
+   323→
+   324→  get_company_profile: {
+   325→    description: 'Perfil completo de la empresa: datos básicos, filtros configurados, productos/servicios, experiencia comprobada y documentos del expediente. Es la ÚNICA evidencia válida que el agente puede usar.',
+   326→    inputSchema: { type: 'object', properties: {} },
+   327→    handler: async () => {
+   328→      const company = await firstCompany()
+   329→      if (!company) throw new Error('No hay empresa configurada')
+   330→      return {
+   331→        companyId: company.id,
+   332→        nombre: company.name,
+   333→        nit: company.nit,
+   334→        descripcion: company.description,
+   335→        ubicacion: [company.city, company.department].filter(Boolean).join(' / ') || null,
+   336→        rango_economico_cop: { min: company.minBudget, max: company.maxBudget },
+   337→        cobertura_departamentos: parseJsonArray(company.departmentsAllowed),
+   338→        modalidades_interes: parseJsonArray(company.modalitiesAllowed),
+   339→        tipos_contrato_interes: parseJsonArray(company.contractTypesAllowed),
+   340→        capacidad_operativa: company.capacity,
+   341→        responsable_aprobacion: company.approverName,
+   342→        productos_servicios: company.products.map((p) => ({ nombre: p.name, descripcion: p.description, categoria: p.category, palabras_clave: parseJsonArray(p.keywords) })),
+   343→        experiencia: company.experiences.map((e) => ({ titulo: e.title, entidad: e.entity, anio: e.year, valor_cop: e.value, descripcion: e.description })),
+   344→        documentos: company.documents.map((d) => ({ nombre: d.name, tipo: d.docType, estado: d.status })),
+   345→      }
+   346→    },
+   347→  },
+   348→
+   349→  generate_proposal: {
+   350→    description:
+   351→      'Genera una nueva versión del borrador de proyecto completo (Modo Agente Proyectista: 11 secciones — resumen ejecutivo, entendimiento, solución, metodología, cronograma, equipo, indicadores, riesgos, por qué nosotros, estructura económica y anexos). Exige que la oportunidad esté aprobada para preparación (aprobación humana previa).',
+   352→    inputSchema: {
+   353→      type: 'object',
+   354→      properties: { opportunityId: { type: 'string' } },
+   355→      required: ['opportunityId'],
+   356→    },
+   357→    write: true,
+   358→    handler: async (args) => {
+   359→      const id = str(args.opportunityId)
+   360→      if (!id) throw new Error('opportunityId es obligatorio')
+   361→      const opp = await db.opportunity.findUnique({
+   362→        where: { id },
+   363→        include: { process: true, requirements: { orderBy: { code: 'asc' } }, company: { include: { products: true, experiences: true, documents: true } } },
+   364→      })
+   365→      if (!opp) throw new Error('Oportunidad no encontrada')
+   366→      if (opp.status !== 'APROBADA_PREPARACION') {
+   367→        throw new Error('Solo se puede generar propuesta para oportunidades aprobadas para preparación (Módulo H — aprobación humana)')
+   368→      }
+   369→
+   370→      const bundle = buildBundle(opp.company)
+   371→      const draft = await generateProposal(opp.process, bundle, mapRequirements(opp.requirements))
+   372→
+   373→      const last = await db.proposal.findFirst({ where: { opportunityId: id }, orderBy: { version: 'desc' } })
+   374→      const version = (last?.version ?? 0) + 1
+   375→      const proposal = await db.proposal.create({
+   376→        data: {
+   377→          companyId: opp.company.id,
+   378→          opportunityId: id,
+   379→          version,
+   380→          status: 'BORRADOR',
+   381→          sectionsJson: JSON.stringify(draft.sections),
+   382→          checklistsJson: JSON.stringify(draft.checklists),
+   383→          unconfirmedCount: draft.unconfirmedCount,
+   384→        },
+   385→      })
+   386→
+   387→      await db.auditEvent.create({
+   388→        data: { action: 'GENERAR_PROPUESTA', entityType: 'Proposal', entityId: proposal.id, detail: `Versión ${version} generada vía MCP con motor ${draft.engine}. ${draft.unconfirmedCount} dato(s) marcado(s) por confirmar.` },
+   389→      })
+   390→
+   391→      return {
+   392→        proposalId: proposal.id,
+   393→        version,
+   394→        engine: draft.engine,
+   395→        marcadores_por_confirmar: draft.unconfirmedCount,
+   396→        secciones: draft.sections,
+   397→        checklist: draft.checklists,
+   398→        advertencia: 'Los precios NO los define el agente: la estructura económica es plantilla. La presentación en SECOP es manual y exige aprobación humana.',
+   399→      }
+   400→    },
+   401→  },
+   402→
+   403→  refine_proposal: {
+   404→    description:
+   405→      'Refinamiento conversacional de la propuesta (Modo Agente Proyectista): aplica una instrucción en lenguaje natural ("haz el cronograma más agresivo", "enfatiza la experiencia ambiental") y regenera el proyecto completo como nueva versión trazable.',
+   406→    inputSchema: {
+   407→      type: 'object',
+   408→      properties: {
+   409→        proposalId: { type: 'string', description: 'ID de la propuesta (lo entrega get_opportunity o generate_proposal)' },
+   410→        instruction: { type: 'string', description: 'Instrucción de refinamiento en lenguaje natural (máx. 2000 caracteres)' },
+   411→      },
+   412→      required: ['proposalId', 'instruction'],
+   413→    },
+   414→    write: true,
+   415→    handler: async (args) => {
+   416→      const proposalId = str(args.proposalId)
+   417→      const instruction = str(args.instruction).trim()
+   418→      if (!proposalId) throw new Error('proposalId es obligatorio')
+   419→      if (!instruction) throw new Error('instruction es obligatoria')
+   420→      if (instruction.length > 2000) throw new Error('La instrucción supera 2000 caracteres')
+   421→
+   422→      const proposal = await db.proposal.findUnique({
+   423→        where: { id: proposalId },
+   424→        include: {
+   425→          opportunity: {
+   426→            include: {
+   427→              process: true,
+   428→              requirements: { orderBy: { code: 'asc' } },
+   429→              company: { include: { products: true, experiences: true, documents: true } },
+   430→            },
+   431→          },
+   432→        },
+   433→      })
+   434→      if (!proposal) throw new Error('Propuesta no encontrada')
+   435→      if (proposal.status === 'APROBADA') throw new Error('La propuesta está aprobada: devuélvela desde la revisión (Módulo H) antes de refinar')
+   436→
+   437→      const opp = proposal.opportunity
+   438→      const history = await db.proposalMessage.findMany({ where: { opportunityId: opp.id }, orderBy: { createdAt: 'desc' }, take: 10 })
+   439→      const result = await refineProposal(opp.process, buildBundle(opp.company), mapRequirements(opp.requirements), parseJsonArray(proposal.sectionsJson), instruction, history.reverse().map((m) => ({ role: m.role, content: m.content })))
+   440→      if (!result) throw new Error('El motor IA no está disponible en este momento')
+   441→
+   442→      const version = proposal.version + 1
+   443→      const unconfirmedCount =
+   444→        result.sections.filter((s) => s.unconfirmed).length +
+   445→        result.sections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
+   446→
+   447→      const newProposal = await db.proposal.create({
+   448→        data: {
+   449→          companyId: opp.company.id,
+   450→          opportunityId: opp.id,
+   451→          version,
+   452→          status: 'BORRADOR',
+   453→          sectionsJson: JSON.stringify(result.sections),
+   454→          checklistsJson: proposal.checklistsJson,
+   455→          unconfirmedCount,
+   456→        },
+   457→      })
+   458→
+   459→      await db.proposalMessage.createMany({
+   460→        data: [
+   461→          { opportunityId: opp.id, role: 'USUARIO', content: instruction, versionBefore: proposal.version, versionAfter: version },
+   462→          { opportunityId: opp.id, role: 'AGENTE', content: result.changeSummary, versionBefore: proposal.version, versionAfter: version, sectionsAffected: JSON.stringify(result.sectionsAffected) },
+   463→        ],
+   464→      })
+   465→
+   466→      await db.auditEvent.create({
+   467→        data: { action: 'REFINAR_PROPUESTA', entityType: 'Proposal', entityId: newProposal.id, detail: `Versión ${version} (desde v${proposal.version}) refinada vía MCP. Secciones: ${result.sectionsAffected.join(', ') || 'n/d'}.` },
+   468→      })
+   469→
+   470→      return { proposalId: newProposal.id, version, resumen_cambio: result.changeSummary, secciones_afectadas: result.sectionsAffected, marcadores_por_confirmar: unconfirmedCount, secciones: result.sections }
+   471→    },
+   472→  },
+   473→
+   474→  sync_secop: {
+   475→    description: 'Sincroniza procesos desde la fuente oficial SECOP II (datos.gov.co, dataset p6dx-8zbt): ingesta con dedup, detección de cambios, filtrado determinístico, compatibilidad, ranking y alertas.',
+   476→    inputSchema: {
+   477→      type: 'object',
+   478→      properties: {
+   479→        days: { type: 'number', default: 45, description: 'Ventana de publicación en días' },
+   480→        limit: { type: 'number', maximum: 1000, default: 300, description: 'Máximo de procesos a consultar' },
+   481→      },
+   482→    },
+   483→    write: true,
+   484→    handler: async (args) => {
+   485→      const result = await runSync({
+   486→        days: num(args.days) ?? 45,
+   487→        limit: Math.min(num(args.limit) ?? 300, 1000),
+   488→      })
+   489→      return result
+   490→    },
+   491→  },
+   492→
+   493→  get_dashboard_stats: {
+   494→    description: 'KPIs del panel: oportunidades por estado, propuestas, alertas no leídas y última sincronización registrada en auditoría.',
+   495→    inputSchema: { type: 'object', properties: {} },
+   496→    handler: async () => {
+   497→      const statuses = ['NUEVA', 'EN_ANALISIS', 'COMPATIBLE', 'APROBADA_PREPARACION', 'DESCARTADA'] as const
+   498→      const [porEstado, propuestas, alertasNoLeidas, ultimaSync] = await Promise.all([
+   499→        Promise.all(statuses.map(async (s) => [s, await db.opportunity.count({ where: { status: s } }) as Promise<number>])),
+   500→        db.proposal.count(),
+   501→        db.notification.count({ where: { read: false } }),
+   502→        db.auditEvent.findFirst({ where: { action: 'SYNC_SECOP' }, orderBy: { createdAt: 'desc' } }),
+   503→      ])
+   504→      return {
+   505→        oportunidades_por_estado: Object.fromEntries(porEstado),
+   506→        propuestas_registradas: propuestas,
+   507→        alertas_no_leidas: alertasNoLeidas,
+   508→        ultima_sincronizacion: ultimaSync ? { fecha: ultimaSync.createdAt, detalle: ultimaSync.detail } : null,
+   509→      }
+   510→    },
+   511→  },
+   512→}
+   513→
+   514→// ─── Dispatcher JSON-RPC ─────────────────────────────────────
+   515→
+   516→export interface RpcOutcome {
+   517→  status: number
+   518→  body: JsonRpcMessage | JsonRpcMessage[] | null
+   519→  sessionId?: string
+   520→}
+   521→
+   522→export async function handleRpcMessage(msg: JsonRpcMessage): Promise<RpcOutcome> {
+   523→  if (!msg || typeof msg !== 'object' || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
+   524→    return { status: 400, body: rpcError(msg?.id ?? null, ERR.REQUEST) }
+   525→  }
+   526→
+   527→  const isNotification = msg.id === undefined || msg.id === null
+   528→
+   529→  switch (msg.method) {
+   530→    case 'initialize': {
+   531→      const requested = typeof msg.params?.protocolVersion === 'string' ? (msg.params.protocolVersion as string) : MCP_PROTOCOL_VERSION
+   532→      const version = requested.startsWith('2025-') || requested.startsWith('2024-') ? requested : MCP_PROTOCOL_VERSION
+   533→      return {
+   534→        status: 200,
+   535→        sessionId: crypto.randomUUID(),
+   536→        body: rpcResult(msg.id, {
+   537→          protocolVersion: version,
+   538→          capabilities: { tools: { listChanged: false } },
+   539→          serverInfo: MCP_SERVER_INFO,
+   540→          instructions:
+   541→            'Agente SECOP Radar: monitorea oportunidades de contratación pública colombiana (SECOP II), las analiza contra el perfil de la empresa y diseña proyectos-respuesta completos. Empieza con get_dashboard_stats o list_opportunities. Las tools de escritura respetan el flujo de aprobación humana.',
+   542→        }),
+   543→      }
+   544→    }
+   545→
+   546→    case 'notifications/initialized':
+   547→      return { status: 202, body: null }
+   548→
+   549→    case 'ping':
+   550→      return isNotification ? { status: 202, body: null } : { status: 200, body: rpcResult(msg.id, {}) }
+   551→
+   552→    case 'tools/list':
+   553→      return {
+   554→        status: 200,
+   555→        body: rpcResult(msg.id, {
+   556→          tools: Object.entries(MCP_TOOLS).map(([name, t]) => ({
+   557→            name,
+   558→            title: name,
+   559→            description: t.description + (t.write ? ' [escribe datos / exige aprobación humana previa]' : ''),
+   560→            inputSchema: t.inputSchema,
+   561→          })),
+   562→        }),
+   563→      }
+   564→  }
+   565→
+   566→  if (msg.method.startsWith('notifications/')) return { status: 202, body: null }
+   567→
+   568→  if (msg.method === 'tools/call') {
+   569→    const name = str(msg.params?.name)
+   570→    const tool = MCP_TOOLS[name]
+   571→    if (!tool) {
+   572→      return { status: 200, body: rpcError(msg.id, ERR.METHOD, `Tool desconocida: ${name}. Usa tools/list para ver las disponibles.`) }
+   573→    }
+   574→    const args = (msg.params?.arguments as Record<string, unknown>) || {}
+   575→    try {
+   576→      const result = await tool.handler(args)
+   577→      return {
+   578→        status: 200,
+   579→        body: rpcResult(msg.id, {
+   580→          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+   581→          structuredContent: result,
+   582→          isError: false,
+   583→        }),
+   584→      }
+   585→    } catch (err) {
+   586→      const message = err instanceof Error ? err.message : 'Error interno de la tool'
+   587→      return {
+   588→        status: 200,
+   589→        body: rpcResult(msg.id, { content: [{ type: 'text', text: `Error: ${message}` }], isError: true }),
+   590→      }
+   591→    }
+   592→  }
+   593→
+   594→  return { status: 200, body: rpcError(msg.id, ERR.METHOD, `Método no soportado: ${msg.method}`) }
+   595→}
+   596→

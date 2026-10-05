@@ -1,6 +1,12 @@
 // Helpers compartidos del cliente: parsing tolerante de JSON y normalización de payloads
 
-import type { OpportunityData, ProposalData } from './client-types'
+import type {
+  OpportunityData,
+  ProposalData,
+  MarcoLogicoData,
+} from './client-types'
+
+export type { MarcoLogicoData }
 
 export function parseJsonArraySafe<T = unknown>(raw: string | null | undefined, fallback: T[] = []): T[] {
   if (!raw) return fallback
@@ -39,6 +45,7 @@ export function normalizeOpp(o: Record<string, unknown>): OpportunityData {
     process: {
       id: String(process?.id ?? ''),
       entity: String(process?.entity ?? ''),
+      reference: (process?.reference as string) ?? null,
       department: (process?.department as string) ?? null,
       city: (process?.city as string) ?? null,
       objectName: String(process?.objectName ?? ''),
@@ -83,10 +90,38 @@ export function normalizeProposal(p: Record<string, unknown>): ProposalData {
     checklists: parseJsonArraySafe(p.checklistsJson as string).length
       ? parseJsonArraySafe(p.checklistsJson as string)
       : ((p.checklists as ProposalData['checklists']) || []),
+    marcoLogico: parseMarcoLogicoSafe(p.logicFrameworkJson as string),
     unconfirmedCount: Number(p.unconfirmedCount ?? 0),
     approvedBy: (p.approvedBy as string) ?? null,
     approvedAt: (p.approvedAt as string) ?? null,
     createdAt: String(p.createdAt),
     approvals: (p.approvals as ProposalData['approvals']) || [],
+  }
+}
+
+/** Parsea el Marco Lógico serializado de una propuesta (tolerante a faltantes). */
+export function parseMarcoLogicoSafe(raw: string | null | undefined): MarcoLogicoData | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const filas = Array.isArray(parsed.filas)
+      ? (parsed.filas as Record<string, unknown>[]).map((f) => ({
+          nivel: String(f.nivel ?? ''),
+          resumen: String(f.resumen ?? ''),
+          indicadores: String(f.indicadores ?? ''),
+          mediosVerificacion: String(f.mediosVerificacion ?? ''),
+          supuestos: String(f.supuestos ?? ''),
+        }))
+      : []
+    if (filas.length === 0) return null
+    return {
+      problemaCentral: String(parsed.problemaCentral ?? ''),
+      causas: Array.isArray(parsed.causas) ? parsed.causas.map(String) : [],
+      efectos: Array.isArray(parsed.efectos) ? parsed.efectos.map(String) : [],
+      objetivoCentral: String(parsed.objetivoCentral ?? ''),
+      filas,
+    }
+  } catch {
+    return null
   }
 }

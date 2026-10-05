@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { handleRpcMessage, type JsonRpcMessage } from '@/lib/mcp'
+import { handleRpcMessage, type JsonRpcMessage, type RpcOutcome } from '@/lib/mcp'
 
 // MÓDULO MCP — Transporte Streamable HTTP (JSON-RPC 2.0) en /api/mcp
 // Auth opcional: si MCP_API_KEY está definida, exige "Authorization: Bearer <clave>".
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   }
 
   const messages: JsonRpcMessage[] = Array.isArray(raw) ? (raw as JsonRpcMessage[]) : [raw as JsonRpcMessage]
-  const outcomes = []
+  const outcomes: RpcOutcome[] = []
   for (const m of messages) {
     outcomes.push(await handleRpcMessage(m))
   }

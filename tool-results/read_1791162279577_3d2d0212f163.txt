@@ -1,0 +1,522 @@
+     1→     1→// MÓDULOS D y G — ANÁLISIS INTELIGENTE Y GENERACIÓN DE PROPUESTA (IA)
+     2→     2→// REGLA CRÍTICA: el agente NUNCA inventa experiencia, contratos, certificaciones,
+     3→     3→// capacidades, precios, firmas, documentos o declaraciones. Todo lo no confirmado
+     4→     4→// queda marcado como PENDIENTE / REQUIERE_REVISIÓN.
+     5→     5→
+     6→     6→import ZAI from 'z-ai-web-dev-sdk'
+     7→     7→import type {
+     8→     8→  AnalysisResult,
+     9→     9→  CompanyConfigData,
+    10→    10→  DocumentData,
+    11→    11→  ExperienceData,
+    12→    12→  ProductItemData,
+    13→    13→  ProposalSection,
+    14→    14→  ChecklistGroup,
+    15→    15→  RawSecopRecord,
+    16→    16→  RequirementItem,
+    17→    17→  RequirementStatus,
+    18→    18→} from './types'
+    19→    19→import { parseJsonArray } from './types'
+    20→    20→
+    21→    21→const VALID_STATUS: RequirementStatus[] = ['CUMPLE', 'NO_CUMPLE', 'PENDIENTE', 'REQUIERE_REVISION']
+    22→    22→
+    23→    23→async function getZai(): Promise<InstanceType<typeof ZAI> | null> {
+    24→    24→  try {
+    25→    25→    return await ZAI.create()
+    26→    26→  } catch {
+    27→    27→    return null
+    28→    28→  }
+    29→    29→}
+    30→    30→
+    31→    31→function extractJson(raw: string): Record<string, unknown> | null {
+    32→    32→  if (!raw) return null
+    33→    33→  let text = raw.trim()
+    34→    34→  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    35→    35→  if (fence) text = fence[1].trim()
+    36→    36→  const start = text.indexOf('{')
+    37→    37→  const end = text.lastIndexOf('}')
+    38→    38→  if (start === -1 || end === -1 || end <= start) return null
+    39→    39→  try {
+    40→    40→    return JSON.parse(text.slice(start, end + 1))
+    41→    41→  } catch {
+    42→    42→    return null
+    43→    43→  }
+    44→    44→}
+    45→    45→
+    46→    46→interface CompanyBundle {
+    47→    47→  company: CompanyConfigData
+    48→    48→  products: ProductItemData[]
+    49→    49→  experiences: ExperienceData[]
+    50→    50→  documents: DocumentData[]
+    51→    51→}
+    52→    52→
+    53→    53→function companyBlock(b: CompanyBundle): string {
+    54→    54→  const prods = b.products.map((p) => `- ${p.name}${p.description ? `: ${p.description}` : ''}${p.keywords.length ? ` (palabras clave: ${p.keywords.join(', ')})` : ''}`).join('\n') || '(ninguno registrado)'
+    55→    55→  const exps = b.experiences.map((e) => `- ${e.title}${e.entity ? ` — ${e.entity}` : ''}${e.year ? ` (${e.year})` : ''}${e.value ? ` — valor $${e.value}` : ''}`).join('\n') || '(ninguna registrada)'
+    56→    56→  const docs = b.documents.map((d) => `- ${d.name} [${d.status}]${d.docType ? ` (${d.docType})` : ''}`).join('\n') || '(ninguno registrado)'
+    57→    57→  return `EMPRESA: ${b.company.name} (NIT: ${b.company.nit || 'no registrado'})
+    58→    58→Descripción: ${b.company.description || 'no registrada'}
+    59→    59→Ubicación: ${b.company.city || ''} ${b.company.department || ''}
+    60→    60→Capacidad operativa declarada: ${b.company.capacity || 'no declarada'}
+    61→    61→Rango económico que puede atender: $${b.company.minBudget} – $${b.company.maxBudget} COP
+    62→    62→
+    63→    63→PRODUCTOS/SERVICIOS REGISTRADOS (única evidencia válida):
+    64→    64→${prods}
+    65→    65→
+    66→    66→EXPERIENCIA COMPROBADA REGISTRADA (única evidencia válida):
+    67→    67→${exps}
+    68→    68→
+    69→    69→DOCUMENTOS DISPONIBLES EN EL EXPEDIENTE:
+    70→    70→${docs}`
+    71→    71→}
+    72→    72→
+    73→    73→// ─── MÓDULO D: análisis de oportunidad ──────────────────────
+    74→    74→
+    75→    75→export async function analyzeOpportunity(rec: RawSecopRecord, bundle: CompanyBundle): Promise<AnalysisResult> {
+    76→    76→  const zai = await getZai()
+    77→    77→  if (zai) {
+    78→    78→    try {
+    79→    79→      const system = `Eres un analista experto en contratación pública colombiana (SECOP II, Ley 80 de 1993 y Ley 2171 de 2021).
+    80→    80→Analizas procesos de contratación para decidir si una empresa puede participar.
+    81→    81→
+    82→    82→REGLAS ABSOLUTAS — NO NEGOCIABLES:
+    83→    83→1. NUNCA inventes experiencia, contratos, certificaciones, capacidades, precios, documentos ni declaraciones de la empresa.
+    84→    84→2. Para cada requisito usa SOLO la evidencia registrada de la empresa. Si no hay evidencia suficiente, el estado debe ser PENDIENTE o REQUIERE_REVISION, nunca CUMPLE.
+    85→    85→3. Marca NO_CUMPLE solo cuando el requisito claramente contradice lo registrado (p. ej. valor fuera de rango, tipo de contrato no manejado).
+    86→    86→4. No sugieras presentar ofertas si hay requisitos habilitantes críticos sin resolver.
+    87→    87→
+    88→    88→Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura:
+    89→    89→{
+    90→    90→  "summary": "resumen del objeto, alcance y condiciones en 2-4 frases",
+    91→    91→  "requirements": [
+    92→    92→    { "code": "R1", "description": "requisito habilitante o técnico identificado", "status": "CUMPLE|NO_CUMPLE|PENDIENTE|REQUIERE_REVISION", "evidence": "qué evidencia registrada lo soporta (o 'ninguna registrada')", "action": "acción concreta para resolverlo" }
+    93→    93→  ],
+    94→    94→  "missingDocs": ["documento faltante 1", "..."],
+    95→    95→  "risks": ["riesgo 1", "..."],
+    96→    96→  "nextAction": "siguiente acción recomendada en una frase"
+    97→    97→}
+    98→    98→Incluye entre 5 y 10 requisitos: habilitantes (jurídicos, financieros, experiencia), técnicos y documentales típicos del tipo de proceso.`
+    99→    99→
+   100→   100→      const user = `PROCESO SECOP II:
+   101→   101→ID: ${rec.id}
+   102→   102→Entidad: ${rec.entity} (${rec.department || 'n/d'} / ${rec.city || 'n/d'})
+   103→   103→Objeto: ${rec.objectName}
+   104→   104→Descripción: ${rec.description || '(no publicada)'}
+   105→   105→Presupuesto/precio base: ${rec.basePrice ? `$${rec.basePrice} COP` : 'no publicado'}
+   106→   106→Modalidad: ${rec.modality || 'n/d'}
+   107→   107→Tipo de contrato: ${rec.contractType || 'n/d'}
+   108→   108→Fase: ${rec.phase || 'n/d'} | Estado: ${rec.state || 'n/d'}
+   109→   109→Duración: ${rec.duration || 'n/d'} ${rec.durationUnit || ''}
+   110→   110→Categoría UNSPSC: ${rec.categoryCode || 'n/d'}
+   111→   111→
+   112→   112→${companyBlock(bundle)}
+   113→   113→
+   114→   114→Analiza el proceso y produce el JSON.`
+   115→   115→
+   116→   116→      const res = await zai.chat.completions.create({
+   117→   117→        messages: [
+   118→   118→          { role: 'system', content: system },
+   119→   119→          { role: 'user', content: user },
+   120→   120→        ],
+   121→   121→        thinking: { type: 'disabled' },
+   122→   122→        temperature: 0.2,
+   123→   123→      })
+   124→   124→
+   125→   125→      const content: string = res?.choices?.[0]?.message?.content ?? ''
+   126→   126→      const parsed = extractJson(content)
+   127→   127→      if (parsed && Array.isArray(parsed.requirements) && parsed.requirements.length > 0) {
+   128→   128→        const requirements: RequirementItem[] = (parsed.requirements as Record<string, unknown>[])
+   129→   129→          .map((r, i) => ({
+   130→   130→            code: String(r.code || `R${i + 1}`),
+   131→   131→            description: String(r.description || '').slice(0, 500),
+   132→   132→            status: VALID_STATUS.includes(r.status as RequirementStatus) ? (r.status as RequirementStatus) : 'PENDIENTE',
+   133→   133→            evidence: r.evidence ? String(r.evidence).slice(0, 400) : undefined,
+   134→   134→            action: r.action ? String(r.action).slice(0, 400) : undefined,
+   135→   135→            source: 'IA' as const,
+   136→   136→          }))
+   137→   137→        return {
+   138→   138→          summary: String(parsed.summary || 'Análisis generado por IA.').slice(0, 1200),
+   139→   139→          requirements,
+   140→   140→          missingDocs: Array.isArray(parsed.missingDocs) ? parsed.missingDocs.map(String).slice(0, 15) : [],
+   141→   141→          risks: Array.isArray(parsed.risks) ? parsed.risks.map(String).slice(0, 10) : [],
+   142→   142→          nextAction: String(parsed.nextAction || 'Revisar la matriz de requisitos con un responsable.').slice(0, 300),
+   143→   143→          engine: 'IA',
+   144→   144→        }
+   145→   145→      }
+   146→   146→    } catch (err) {
+   147→   147→      console.error('[ai] analyzeOpportunity: motor IA falló, cae a reglas —', err instanceof Error ? err.message : err)
+   148→   148→      // cae al motor de reglas
+   149→   149→    }
+   150→   150→  }
+   151→   151→
+   152→   152→  return ruleBasedAnalysis(rec, bundle)
+   153→   153→}
+   154→   154→
+   155→   155→/** Motor de respaldo basado en reglas — nunca inventa, marca todo como pendiente de validación. */
+   156→   156→export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): AnalysisResult {
+   157→   157→  const c = bundle.company
+   158→   158→  const requirements: RequirementItem[] = [
+   159→   159→    {
+   160→   160→      code: 'R1',
+   161→   161→      description: 'Valor del proceso dentro del rango económico que la empresa puede atender',
+   162→   162→      status: rec.basePrice == null ? 'PENDIENTE' : rec.basePrice >= c.minBudget && rec.basePrice <= c.maxBudget ? 'CUMPLE' : 'NO_CUMPLE',
+   163→   163→      evidence: rec.basePrice ? `Precio base publicado: $${rec.basePrice} COP` : 'Precio no publicado en SECOP',
+   164→   164→      action: rec.basePrice == null ? 'Consultar el valor estimado en el pliego del proceso' : 'Confirmar capacidad de pago y flujo',
+   165→   165→      source: 'REGLA',
+   166→   166→    },
+   167→   167→    {
+   168→   168→      code: 'R2',
+   169→   169→      description: 'Experiencia previa relacionada con el objeto del proceso',
+   170→   170→      status: bundle.experiences.length > 0 ? 'REQUIERE_REVISION' : 'PENDIENTE',
+   171→   171→      evidence: bundle.experiences.length > 0 ? `${bundle.experiences.length} contrato(s) registrado(s) — verificar pertinencia` : 'Ninguna experiencia registrada',
+   172→   172→      action: 'Comparar el objeto del proceso contra la experiencia registrada de la empresa',
+   173→   173→      source: 'REGLA',
+   174→   174→    },
+   175→   175→    {
+   176→   176→      code: 'R3',
+   177→   177→      description: 'Documentos jurídicos habilitantes (RUT, RUP si aplica, certificación de existencia)',
+   178→   178→      status: 'PENDIENTE',
+   179→   179→      evidence: 'Depende de los documentos registrados en el expediente',
+   180→   180→      action: 'Verificar vigencia de RUT/RUP y completar lo que falte',
+   181→   181→      source: 'REGLA',
+   182→   182→    },
+   183→   183→    {
+   184→   184→      code: 'R4',
+   185→   185→      description: 'Garantías exigidas (seriedad de la propuesta, cumplimiento, calidad)',
+   186→   186→      status: 'REQUIERE_REVISION',
+   187→   187→      evidence: 'No determinable desde los datos publicados',
+   188→   188→      action: 'Revisar el pliego y confirmar con la compañía de garantías',
+   189→   189→      source: 'REGLA',
+   190→   190→    },
+   191→   191→    {
+   192→   192→      code: 'R5',
+   193→   193→      description: 'Capacidad financiera requerida por la entidad',
+   194→   194→      status: 'REQUIERE_REVISION',
+   195→   195→      evidence: 'Información financiera de la empresa no registrada',
+   196→   196→      action: 'Cargar estados financieros o índices si el pliego los exige',
+   197→   197→      source: 'REGLA',
+   198→   198→    },
+   199→   199→    {
+   200→   200→      code: 'R6',
+   201→   201→      description: 'Plazo de ejecución compatible con la capacidad operativa',
+   202→   202→      status: rec.duration ? 'REQUIERE_REVISION' : 'PENDIENTE',
+   203→   203→      evidence: rec.duration ? `Duración publicada: ${rec.duration} ${rec.durationUnit || ''}` : 'Duración no publicada',
+   204→   204→      action: 'Confirmar con operaciones que el plazo es cumplible',
+   205→   205→      source: 'REGLA',
+   206→   206→    },
+   207→   207→  ]
+   208→   208→  const missingDocs = bundle.documents.filter((d) => d.status !== 'DISPONIBLE').map((d) => d.name)
+   209→   209→  return {
+   210→   210→    summary: `Análisis basado en reglas (motor IA no disponible): proceso ${rec.id} de ${rec.entity}, objeto "${rec.objectName.slice(0, 140)}". Los requisitos quedaron marcados para validación humana.`,
+   211→   211→    requirements,
+   212→   212→    missingDocs: missingDocs.length ? missingDocs : ['Determinar documentación exigida en el pliego'],
+   213→   213→    risks: [
+   214→   214→      'Análisis generado sin IA — validar el pliego directamente',
+   215→   215→      rec.basePrice == null ? 'El valor del proceso no está publicado' : 'Valores pueden cambiar por adiciones',
+   216→   216→    ],
+   217→   217→    nextAction: 'Descargar y revisar el pliego del proceso antes de decidir la participación',
+   218→   218→    engine: 'REGLAS',
+   219→   219→  }
+   220→   220→}
+   221→   221→
+   222→   222→// ─── MÓDULO G: generación de propuesta — MODO AGENTE PROYECTISTA ─────
+   223→   223→
+   224→   224→export interface ProposalDraft {
+   225→   225→  sections: ProposalSection[]
+   226→   226→  checklists: ChecklistGroup[]
+   227→   227→  unconfirmedCount: number
+   228→   228→  engine: 'IA' | 'REGLAS'
+   229→   229→}
+   230→   230→
+   231→   231→const DEEP_SECTION_SPEC = `1. "resumen_ejecutivo" — Resumen ejecutivo: 2-3 párrafos que presenten la comprensión de la necesidad, la solución propuesta y el diferencial de la empresa. Debe enganchar al evaluador en los primeros renglones.
+   232→   232→2. "entendimiento" — Entendimiento del objeto y contexto: qué necesita realmente la entidad, el problema de fondo detrás del objeto, contexto territorial/institucional relevante y condiciones del proceso (duración, lugar, modalidad).
+   233→   233→3. "solucion" — Solución propuesta: el enfoque de solución adaptado PUNTO POR PUNTO a la necesidad. Describe el alcance, los componentes de la solución y cómo cada componente responde a una parte del objeto. Explica el diferencial metodológico de la propuesta.
+   234→   234→4. "metodologia" — Metodología y plan de trabajo: fases numeradas (Fase 1, Fase 2…) con actividades concretas, productos/entregables por fase y cómo se controla la calidad. Debe ser una metodología realista para el tipo de contrato y coherente con los servicios registrados de la empresa.
+   235→   235→5. "cronograma" — Cronograma tentativo: distribución por fases contra la duración publicada (o [POR CONFIRMAR: plazo] si no está publicada). Usa una lista o tabla simple de fases con semanas/mes correspondiente.
+   236→   236→6. "equipo" — Equipo y organización: roles necesarios y perfil de cada rol (responsable, apoyo técnico, logística), organización del trabajo y canales de coordinación con la entidad. NO inventes nombres ni hojas de vida: usa [POR CONFIRMAR: nombre del profesional] donde falte.
+   237→   237→7. "indicadores" — Indicadores de éxito: 3-6 indicadores medibles alineados con el objeto (producto, oportunidad, calidad, satisfacción), con fórmula y meta referencial.
+   238→   238→8. "gestion_riesgos" — Gestión de riesgos del proyecto: 3-5 riesgos propios de la ejecución (no de la participación), con mitigación concreta cada uno.
+   239→   239→9. "por_que_nosotros" — Por qué esta empresa: argumenta SOLO con la experiencia, productos/servicios y documentos registrados de la empresa, conectándolos explícitamente con el objeto. Si la evidencia es poca, sé honesto y enfatiza capacidad y enfoque, sin exagerar.
+   240→   240→10. "estructura_economica" — Estructura económica (plantilla): SIEMPRE "unconfirmed": true. Plantilla de tabla Concepto|Valor con [POR CONFIRMAR] en cada valor, más el presupuesto oficial de referencia y la advertencia de que el precio lo define la empresa.
+   241→   241→11. "anexos" — Anexos y documentos de la oferta: lista de anexos exigibles según el tipo de proceso y la matriz de requisitos, indicando cuáles ya están en el expediente y cuáles faltan.`
+   242→   242→
+   243→   243→export async function generateProposal(
+   244→   244→  rec: RawSecopRecord,
+   245→   245→  bundle: CompanyBundle,
+   246→   246→  requirements: RequirementItem[],
+   247→   247→): Promise<ProposalDraft> {
+   248→   248→  const zai = await getZai()
+   249→   249→  if (zai) {
+   250→   250→    try {
+   251→   251→      const system = `Eres un AGENTE PROYECTISTA experto en contratación pública colombiana (SECOP II, Ley 80 de 1993, Ley 2171 de 2021).
+   252→   252→Tu misión: diseñar un PROYECTO COMPLETO e IRRESISTIBLE para responder a un proceso de contratación, adaptado a los requerimientos específicos de la oferta.
+   253→   253→
+   254→   254→QUÉ HACE IRRESISTIBLE UNA PROPUESTA (aplícalo):
+   255→   255→- Demuestra entendimiento profundo del problema de la entidad, no solo del texto del objeto.
+   256→   256→- Responde punto por punto a la necesidad con una metodología concreta y realista.
+   257→   257→- Habla el idioma del evaluador: enfoque metodológico, entregables verificables, equipo con roles claros, cronograma cumplible, riesgos gestionados e indicadores medibles.
+   258→   258→- Argumenta el diferencial de la empresa con EVIDENCIA, sin inflarla.
+   259→   259→
+   260→   260→REGLAS ABSOLUTAS — NO NEGOCIABLES:
+   261→   261→1. NUNCA inventes experiencia, contratos, certificaciones, capacidades, precios, cifras económicas, firmas, documentos, nombres de personas ni declaraciones.
+   262→   262→2. Usa ÚNICAMENTE la información registrada de la empresa que aparece abajo. La persuasión sale de la estructura y el argumento, no de datos inventados.
+   263→   263→3. Cuando la propuesta necesite un dato que la empresa no tiene registrado, escribe literalmente [POR CONFIRMAR: qué dato falta] y marca la sección con "unconfirmed": true.
+   264→   264→4. NO propongas valores económicos: la estructura económica queda como plantilla para que la empresa la diligencie.
+   265→   265→5. Escribe en español colombiano profesional, con concreción (nada de relleno genérico). Cada párrafo debe aportar información.
+   266→   266→
+   267→   267→Devuelve EXCLUSIVAMENTE JSON válido con esta estructura:
+   268→   268→{
+   269→   269→  "sections": [
+   270→   270→    { "key": "resumen_ejecutivo", "title": "1. Resumen ejecutivo", "content": "...", "unconfirmed": false },
+   271→   271→    { "key": "entendimiento", "title": "2. Entendimiento del objeto y contexto", "content": "...", "unconfirmed": false },
+   272→   272→    { "key": "solucion", "title": "3. Solución propuesta", "content": "...", "unconfirmed": false },
+   273→   273→    { "key": "metodologia", "title": "4. Metodología y plan de trabajo", "content": "...", "unconfirmed": false },
+   274→   274→    { "key": "cronograma", "title": "5. Cronograma tentativo", "content": "...", "unconfirmed": false },
+   275→   275→    { "key": "equipo", "title": "6. Equipo y organización", "content": "...", "unconfirmed": false },
+   276→   276→    { "key": "indicadores", "title": "7. Indicadores de éxito", "content": "...", "unconfirmed": false },
+   277→   277→    { "key": "gestion_riesgos", "title": "8. Gestión de riesgos", "content": "...", "unconfirmed": false },
+   278→   278→    { "key": "por_que_nosotros", "title": "9. Por qué esta empresa", "content": "...", "unconfirmed": false },
+   279→   279→    { "key": "estructura_economica", "title": "10. Estructura económica (plantilla)", "content": "...", "unconfirmed": true },
+   280→   280→    { "key": "anexos", "title": "11. Anexos y documentos de la oferta", "content": "...", "unconfirmed": false }
+   281→   281→  ],
+   282→   282→  "checklists": [
+   283→   283→    { "group": "Documentos administrativos", "items": [ { "label": "...", "required": true } ] },
+   284→   284→    { "group": "Antes de enviar", "items": [ { "label": "...", "required": true } ] }
+   285→   285→  ]
+   286→   286→}
+   287→   287→
+   288→   288→ESPECIFICACIÓN DE CADA SECCIÓN:
+   289→   289→${DEEP_SECTION_SPEC}`
+   290→   290→
+   291→   291→      const reqBlock = requirements.map((r) => `- [${r.status}] ${r.description} (evidencia: ${r.evidence || 'ninguna registrada'})`).join('\n')
+   292→   292→
+   293→   293→      const user = `PROCESO SECOP II A CUBRIR:
+   294→   294→ID: ${rec.id}
+   295→   295→Entidad: ${rec.entity}
+   296→   296→Objeto: ${rec.objectName}
+   297→   297→Descripción publicada: ${rec.description || '(no publicada — deduce la necesidad desde el objeto)'}
+   298→   298→Presupuesto de referencia: ${rec.basePrice ? `$${rec.basePrice} COP` : 'no publicado'} (NO usarlo como precio de la propuesta)
+   299→   299→Duración publicada: ${rec.duration || 'n/d'} ${rec.durationUnit || ''}
+   300→   300→Lugar: ${rec.city || 'n/d'} / ${rec.department || 'n/d'}
+   301→   301→Modalidad: ${rec.modality || 'n/d'} | Tipo de contrato: ${rec.contractType || 'n/d'}
+   302→   302→
+   303→   303→${companyBlock(bundle)}
+   304→   304→
+   305→   305→MATRIZ DE REQUISITOS DEL ANÁLISIS (úsala para alinear la propuesta y armar los anexos):
+   306→   306→${reqBlock}
+   307→   307→
+   308→   308→Diseña el proyecto completo siguiendo la estructura JSON indicada.`
+   309→   309→
+   310→   310→      const res = await zai.chat.completions.create({
+   311→   311→        messages: [
+   312→   312→          { role: 'system', content: system },
+   313→   313→          { role: 'user', content: user },
+   314→   314→        ],
+   315→   315→        thinking: { type: 'disabled' },
+   316→   316→        temperature: 0.4,
+   317→   317→      })
+   318→   318→
+   319→   319→      const content: string = res?.choices?.[0]?.message?.content ?? ''
+   320→   320→      const parsed = extractJson(content)
+   321→   321→      if (parsed && Array.isArray(parsed.sections) && parsed.sections.length > 0) {
+   322→   322→        const sections: ProposalSection[] = (parsed.sections as Record<string, unknown>[]).map((s, i) => ({
+   323→   323→          key: String(s.key || `seccion_${i + 1}`),
+   324→   324→          title: String(s.title || `Sección ${i + 1}`),
+   325→   325→          content: String(s.content || ''),
+   326→   326→          unconfirmed: Boolean(s.unconfirmed) || String(s.content || '').includes('[POR CONFIRMAR'),
+   327→   327→        }))
+   328→   328→        const checklists: ChecklistGroup[] = Array.isArray(parsed.checklists)
+   329→   329→          ? (parsed.checklists as Record<string, unknown>[]).map((g) => ({
+   330→   330→              group: String(g.group || 'Checklist'),
+   331→   331→              items: Array.isArray(g.items)
+   332→   332→                ? (g.items as Record<string, unknown>[]).map((it) => ({
+   333→   333→                    label: String(it.label || ''),
+   334→   334→                    required: Boolean(it.required),
+   335→   335→                  }))
+   336→   336→                : [],
+   337→   337→            }))
+   338→   338→          : []
+   339→   339→        const unconfirmedCount =
+   340→   340→          sections.filter((s) => s.unconfirmed).length +
+   341→   341→          sections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
+   342→   342→        return { sections, checklists, unconfirmedCount, engine: 'IA' }
+   343→   343→      }
+   344→   344→    } catch (err) {
+   345→   345→      console.error('[ai] generateProposal: motor IA falló, cae a plantilla —', err instanceof Error ? err.message : err)
+   346→   346→      // cae a plantilla
+   347→   347→    }
+   348→   348→  }
+   349→   349→  return templateProposal(rec, bundle, requirements)
+   350→   350→}
+   351→   351→
+   352→   352→// ─── MÓDULO G+: refinamiento conversacional de la propuesta ──────
+   353→   353→
+   354→   354→export interface RefinementResult {
+   355→   355→  sections: ProposalSection[]
+   356→   356→  changeSummary: string
+   357→   357→  sectionsAffected: string[]
+   358→   358→  engine: 'IA'
+   359→   359→}
+   360→   360→
+   361→   361→/** Regenera la propuesta aplicando una instrucción del usuario, conservando la regla anti-invención. Devuelve null si no hay motor IA. */
+   362→   362→export async function refineProposal(
+   363→   363→  rec: RawSecopRecord,
+   364→   364→  bundle: CompanyBundle,
+   365→   365→  requirements: RequirementItem[],
+   366→   366→  currentSections: ProposalSection[],
+   367→   367→  instruction: string,
+   368→   368→  history: { role: string; content: string }[],
+   369→   369→): Promise<RefinementResult | null> {
+   370→   370→  const zai = await getZai()
+   371→   371→  if (!zai) return null
+   372→   372→
+   373→   373→  try {
+   374→   374→    const system = `Eres el mismo AGENTE PROYECTISTA que redactó una propuesta para un proceso SECOP II. Ahora trabajas en el refinamiento conversacional con el usuario.
+   375→   375→
+   376→   376→REGLAS ABSOLUTAS — NO NEGOCIABLES:
+   377→   377→1. NUNCA inventes experiencia, contratos, certificaciones, capacidades, precios, cifras económicas, firmas, documentos, nombres de personas ni declaraciones.
+   378→   378→2. Usa ÚNICAMENTE la información registrada de la empresa. Si la instrucción pide un dato que no está registrado, escribe [POR CONFIRMAR: qué dato falta].
+   379→   379→3. Aplica la instrucción del usuario con precisión; el resto del proyecto debe quedar consistente con el cambio (si cambias la metodología, ajusta cronograma/indicadores si aplica).
+   380→   380→4. NO degrades otras secciones: conserva su nivel de detalle y su evidencia.
+   381→   381→5. Devuelve SIEMPRE el proyecto completo (las 11 secciones), no solo las tocadas.
+   382→   382→
+   383→   383→Devuelve EXCLUSIVAMENTE JSON válido:
+   384→   384→{
+   385→   385→  "sections": [ { "key": "...", "title": "...", "content": "...", "unconfirmed": false } ],
+   386→   386→  "changeSummary": "resumen en 1-3 frases de qué cambió y por qué",
+   387→   387→  "sectionsAffected": ["metodologia", "cronograma"]
+   388→   388→}`
+   389→   389→
+   390→   390→    const current = currentSections
+   391→   391→      .map((s) => `### ${s.title} (key: ${s.key}${s.unconfirmed ? ' — contiene [POR CONFIRMAR]' : ''})\n${s.content}`)
+   392→   392→      .join('\n\n')
+   393→   393→
+   394→   394→    const historyBlock = history.length
+   395→   395→      ? history.map((m) => `${m.role === 'USUARIO' ? 'Usuario' : 'Agente'}: ${m.content}`).join('\n')
+   396→   396→      : '(sin conversación previa)'
+   397→   397→
+   398→   398→    const reqBlock = requirements.map((r) => `- [${r.status}] ${r.description}`).join('\n')
+   399→   399→
+   400→   400→    const user = `PROCESO SECOP II:
+   401→   401→ID: ${rec.id} | Entidad: ${rec.entity}
+   402→   402→Objeto: ${rec.objectName}
+   403→   403→Duración: ${rec.duration || 'n/d'} ${rec.durationUnit || ''} | Lugar: ${rec.city || 'n/d'} / ${rec.department || 'n/d'}
+   404→   404→
+   405→   405→${companyBlock(bundle)}
+   406→   406→
+   407→   407→MATRIZ DE REQUISITOS:
+   408→   408→${reqBlock}
+   409→   409→
+   410→   410→CONVERSACIÓN PREVIA:
+   411→   411→${historyBlock}
+   412→   412→
+   413→   413→BORRADOR ACTUAL COMPLETO:
+   414→   414→${current}
+   415→   415→
+   416→   416→INSTRUCCIÓN NUEVA DEL USUARIO:
+   417→   417→"""${instruction}"""
+   418→   418→
+   419→   419→Aplica la instrucción y devuelve el JSON del proyecto completo actualizado.`
+   420→   420→
+   421→   421→    const res = await zai.chat.completions.create({
+   422→   422→      messages: [
+   423→   423→        { role: 'system', content: system },
+   424→   424→        { role: 'user', content: user },
+   425→   425→      ],
+   426→   426→      thinking: { type: 'disabled' },
+   427→   427→      temperature: 0.35,
+   428→   428→    })
+   429→   429→
+   430→   430→    const content: string = res?.choices?.[0]?.message?.content ?? ''
+   431→   431→    const parsed = extractJson(content)
+   432→   432→    if (!parsed || !Array.isArray(parsed.sections) || parsed.sections.length === 0) return null
+   433→   433→
+   434→   434→    const sections: ProposalSection[] = (parsed.sections as Record<string, unknown>[]).map((s, i) => ({
+   435→   435→      key: String(s.key || `seccion_${i + 1}`),
+   436→   436→      title: String(s.title || `Sección ${i + 1}`),
+   437→   437→      content: String(s.content || ''),
+   438→   438→      unconfirmed: Boolean(s.unconfirmed) || String(s.content || '').includes('[POR CONFIRMAR'),
+   439→   439→    }))
+   440→   440→
+   441→   441→    return {
+   442→   442→      sections,
+   443→   443→      changeSummary: String(parsed.changeSummary || 'Propuesta actualizada según la instrucción.').slice(0, 800),
+   444→   444→      sectionsAffected: Array.isArray(parsed.sectionsAffected) ? parsed.sectionsAffected.map(String).slice(0, 12) : [],
+   445→   445→      engine: 'IA',
+   446→   446→    }
+   447→   447→  } catch {
+   448→   448→    return null
+   449→   449→  }
+   450→   450→}
+   451→   451→
+   452→   452→/** Plantilla de respaldo — estructura completa sin inventar datos. */
+   453→   453→export function templateProposal(rec: RawSecopRecord, bundle: CompanyBundle, requirements: RequirementItem[]): ProposalDraft {
+   454→   454→  const c = bundle.company
+   455→   455→  const prods = bundle.products.map((p) => `- ${p.name}`).join('\n') || '[POR CONFIRMAR: registrar productos/servicios de la empresa]'
+   456→   456→  const exps = bundle.experiences.map((e) => `- ${e.title}${e.entity ? ` — ${e.entity}` : ''}${e.year ? ` (${e.year})` : ''}`).join('\n') || '[POR CONFIRMAR: registrar experiencia relevante]'
+   457→   457→  const unconfirmed = !bundle.experiences.length || !bundle.products.length
+   458→   458→
+   459→   459→  const sections: ProposalSection[] = [
+   460→   460→    {
+   461→   461→      key: 'presentacion',
+   462→   462→      title: '1. Presentación',
+   463→   463→      content: `${c.name}${c.nit ? `, identificada con NIT ${c.nit}` : ''}${c.department ? `, con presencia en ${c.city || ''} ${c.department}` : ''}, presenta su propuesta para el proceso ${rec.id} convocado por ${rec.entity}, cuyo objeto es: ${rec.objectName}.`,
+   464→   464→      unconfirmed: false,
+   465→   465→    },
+   466→   466→    {
+   467→   467→      key: 'entendimiento',
+   468→   468→      title: '2. Entendimiento del objeto',
+   469→   469→      content: `El proceso exige: ${rec.description || rec.objectName}. ${rec.duration ? `La duración publicada es de ${rec.duration} ${rec.durationUnit || 'días'}.` : '[POR CONFIRMAR: plazo de ejecución en el pliego]'} El lugar de ejecución corresponde a ${rec.city || '[POR CONFIRMAR]'} / ${rec.department || '[POR CONFIRMAR]'}.`,
+   470→   470→      unconfirmed: false,
+   471→   471→    },
+   472→   472→    {
+   473→   473→      key: 'propuesta_tecnica',
+   474→   474→      title: '3. Propuesta técnica',
+   475→   475→      content: `La empresa cuenta con los siguientes productos/servicios registrados pertinentes:\n${prods}\n\nExperiencia registrada relevante:\n${exps}\n\n[POR CONFIRMAR: detalle metodológico y asignación de equipo de trabajo]`,
+   476→   476→      unconfirmed,
+   477→   477→    },
+   478→   478→    {
+   479→   479→      key: 'estructura_economica',
+   480→   480→      title: '4. Estructura económica (plantilla)',
+   481→   481→      content: `⚠ PLANTILLA PARA DILIGENCIAR — el agente no define precios:\n\n| Concepto | Valor |\n|---|---|\n| Valor directo | [POR CONFIRMAR] |\n| Administración | [POR CONFIRMAR] |\n| Imprevistos | [POR CONFIRMAR] |\n| IVA | [POR CONFIRMAR] |\n| TOTAL | [POR CONFIRMAR] |\n\nPresupuesto oficial de referencia: ${rec.basePrice ? `$${rec.basePrice.toLocaleString('es-CO')} COP` : 'no publicado'}.`,
+   482→   482→      unconfirmed: true,
+   483→   483→    },
+   484→   484→    {
+   485→   485→      key: 'anexos',
+   486→   486→      title: '5. Anexos requeridos',
+   487→   487→      content: requirements
+   488→   488→        .filter((r) => r.status !== 'CUMPLE')
+   489→   489→        .map((r) => `- [${r.status}] ${r.description} → ${r.action || 'definir acción'}`)
+   490→   490→        .join('\n') || 'Sin anexos pendientes según la matriz de requisitos.',
+   491→   491→      unconfirmed: false,
+   492→   492→    },
+   493→   493→  ]
+   494→   494→
+   495→   495→  const checklists: ChecklistGroup[] = [
+   496→   496→    {
+   497→   497→      group: 'Documentos administrativos',
+   498→   498→      items: [
+   499→   499→        { label: 'Propuesta técnica firmada', required: true },
+   500→   500→        { label: 'Estructura económica diligenciada y firmada', required: true },
+   501→   501→        { label: 'RUT vigente', required: true },
+   502→   502→        { label: 'Certificación de existencia y representación legal', required: true },
+   503→   503→        { label: 'Garantía de seriedad de la propuesta (si el pliego la exige)', required: false },
+   504→   504→      ],
+   505→   505→    },
+   506→   506→    {
+   507→   507→      group: 'Antes de enviar',
+   508→   508→      items: [
+   509→   509→        { label: 'Verificar fecha límite de presentación en el proceso SECOP', required: true },
+   510→   510→        { label: 'Confirmar requisitos habilitantes de la matriz', required: true },
+   511→   511→        { label: 'Revisar que no queden marcadores [POR CONFIRMAR]', required: true },
+   512→   512→        { label: 'Aprobación explícita del responsable registrado', required: true },
+   513→   513→      ],
+   514→   514→    },
+   515→   515→  ]
+   516→   516→
+   517→   517→  const unconfirmedCount = sections.reduce((acc, s) => acc + (String(s.content).match(/\[POR CONFIRMAR/g) || []).length, 0)
+   518→   518→  return { sections, checklists, unconfirmedCount, engine: 'REGLAS' }
+   519→   519→}
+   520→   520→
+   521→   521→export { parseJsonArray }
+   522→   522→
