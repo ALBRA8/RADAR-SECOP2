@@ -206,3 +206,4 @@ Work Log:
 Stage Summary:
 - TODO listo para publicar: commit cc72510 en main (188+ archivos, incluye db/custom.db demo con 11 oportunidades reales), remote origin configurado, repo remoto vacío verificado.
 - Bloqueo único: se necesita un Personal Access Token de GitHub (scope repo) que el usuario debe generar en github.com/settings/tokens. Tan pronto lo pegue: git push https://<TOKEN>@github.com/ALBRA8/RADAR-SECOP2.git main, y se recomienda revocar el token después.
+- CULMINACIÓN Task 9: push exitoso a GitHub. Commit principal cc72510 + 89c89d0 (worklog) + 88b3b36 (README raíz creado y .env des-trackeado por seguridad). Remote refs/heads/main = 88b3b36 = HEAD local, sincronía verificada con git ls-remote. Token usado solo inline en la URL de push, NUNCA persistido en .git/config ni en archivos trackeados. Recomendado al usuario: revocar el PAT tras confirmar la publicación.
