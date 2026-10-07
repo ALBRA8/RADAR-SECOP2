@@ -16,8 +16,16 @@ La plataforma monitorea en tiempo real los procesos de contratación publicados 
 | **Especialidad Marco Lógico** | Generación y validación de la matriz de marco lógico exigida en muchas licitaciones públicas (MGA / SGR), persistida como JSON consultable |
 | **Canales Telegram y WhatsApp** | Comunicación bidireccional con el agente: texto, **notas de voz (STT)**, imágenes, documentos y video. Lee pliegos y analiza fotos de contratos |
 | **Multimodalidad** | Análisis de PDF/imágenes/audio con validación de magic bytes y límite de 25 MB |
-| **Servidor MCP** | Model Context Protocol para que **otros proyectos** consulten oportunidades, propuestas y marco lógico vía JSON-RPC |
-| **Control y trazabilidad** | Aprobación humana de propuestas, eventos de auditoría y notificaciones; exportación a Word |
+| **Servidor MCP** | Model Context Protocol para que **otros proyectos** consulten oportunidades, propuestas y marco lógico vía JSON-RPC — 17 tools, fail-closed en producción sin `MCP_API_KEY` |
+| **Evidence Contract** | Toda afirmación clave es una fila `Evidence` con fuente, tipo, timestamp, hecho extraído, confianza, **TruthLevel** (VERIFIED/OBSERVED/INFERRED/ESTIMATED/UNKNOWN), estado de verificación y provenance — siempre responde "¿de dónde salió este dato?" |
+| **Regla de oro (Truth)** | `INFERRED + CUMPLE` es inválido: el cumplimiento sin evidencia verificable se degrada a PENDIENTE y bloquea aprobaciones (422), con override `force` auditado |
+| **Detección de modificaciones** | Diff real valor-a-valor (old→new) sobre 9 campos del proceso, persistido en `ProcessChange` con impacto ALTA/MEDIA/BAJA y ventana de ingesta en hora Colombia |
+| **MemoryDV** | Memoria aislada por `agent_id` y dominio: EPISODIC/SEMANTIC/FACTUAL/PROCEDURAL con consolidación, decay y regla dura: la memoria FACTUAL exige evidencia |
+| **Skills (11 contratos)** | Skill Contracts versionados con procedimiento, verificación, pitfalls, política de evidencia y regresiones — validados y con successRate |
+| **Doctor** | Autodiagnóstico en 10 checks (SECOP, DB, canales, MCP, memoria, skills, provenance, deadlines…) con fixes seguros auditados |
+| **Autonomía L0-L5** | Techo explícito (`L2_EXECUTE_SAFE` por defecto); L4/L5 requieren bandera manual; acciones externas sin aprobación humana quedan bloqueadas |
+| **Observability** | Cada operación clave queda en `Execution` (correlación, latencia, proveedores, I/O, errores) + `ProviderMetric` — una evaluación es reconstruible |
+| **Control y trazabilidad** | Aprobación humana con snapshot completo (versión, requisitos, score), eventos de auditoría y notificaciones; exportación a Word |
 
 ## 🧭 Principios de datos
 
@@ -28,9 +36,29 @@ La plataforma monitorea en tiempo real los procesos de contratación publicados 
 ## 🛠 Stack
 
 - **Next.js (App Router)** + TypeScript + Tailwind CSS + shadcn/ui
-- **Prisma ORM** sobre SQLite (`db/custom.db`, base demo incluida con 11 oportunidades reales)
+- **Prisma ORM** sobre SQLite (`db/custom.db`, base demo incluida con oportunidades reales)
 - **z-ai-web-dev-sdk** para IA (solo backend, con fallback a reglas)
-- API Socrata de datos.gov.co como única fuente de datos públicos
+- **Bun test** para unit tests; suite E2E en Python; fuente de datos: API Socrata de datos.gov.co
+
+## 🧪 Tests
+
+```bash
+bun test tests/unit              # unit: regla de oro, memoria, skills, seguridad, filtros
+python3 scripts/e2e_test.py ALL  # fases A-J: canales, multimodal, Marco Lógico, MCP, evidencia, memoria, doctor, flujo integral
+bash scripts/test_security.sh    # 12 asserts de seguridad
+python3 scripts/test_sync.py     # dedup, diff y idempotencia de ingesta
+```
+
+## ⚙️ Variables de entorno
+
+| Variable | Requerida | Descripción |
+|---|---|---|
+| `DATABASE_URL` | Sí | Ruta absoluta de la BD SQLite (`file:/ruta/absoluta/db/custom.db` recomendado: las relativas se resuelven distinto entre CLI Prisma y runtime standalone) |
+| `MCP_API_KEY` | Prod | Si está definida exige Bearer en `/api/mcp`; en producción sin key el MCP es fail-closed (503) |
+| `TELEGRAM_WEBHOOK_SECRET` | No | Valida `x-telegram-bot-api-secret-token` del webhook |
+| `WHATSAPP_APP_SECRET` | No | Valida firma `X-Hub-Signature-256` del webhook |
+| `SOCRATA_APP_TOKEN` | No | Token Socrata para evitar throttling en sincronizaciones masivas |
+| `RADAR_ALLOW_L4_L5` | No | Bandera manual para habilitar autonomía L4/L5 (nunca por defecto) |
 
 ## 🚀 Puesta en marcha
 

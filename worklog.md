@@ -367,3 +367,21 @@ Work Log:
 
 Stage Summary:
 - VEREDICTO: CLEAN-ROOM FAIL (2 bloqueantes) con ruta de remediación clara. (1) Git hygiene: el trabajo de los agentes 2-b..3-b no está commiteado — un clon git pierde 8 API routes, 2 componentes UI, skills_registry y ~19 modificaciones (incluido schema.prisma); ACCIÓN: git add/commit de src/, skills_registry/, agent-ctx/ y dejar de trackear db/custom.db (git rm --cached). (2) DATABASE_URL relativa rompe producción: bifurcación CLI (prisma/) vs runtime standalone (.next/standalone/node_modules/.prisma/client/db/) → error 14; ACCIÓN: usar ruta absoluta vía env del entorno de despliegue, o postbuild que copie la DB, o unificar resolución. (3) Sandbox exporta DATABASE_URL global que pisa .env — documentar `unset DATABASE_URL` en procedimientos. Con el working tree actual + workaround de copia, TODO lo demás pasa end-to-end (200s, 11 skills allValid, doctor DEGRADED esperado, 17 tools MCP, persistencia y aislamiento verificados).
+
+---
+Task ID: 10
+Agent: Super Z (agente principal, integrador)
+Task: PROMPT 05 — Finalización RADAR-SECOP2: auditoría multiagente, implementación Wave 2/3, tests, E2E integral, clean-room y cierre.
+
+Work Log:
+- WAVE 1 (7 auditores paralelos 1-a..1-g): arquitectura, SECOP/ingesta, evidencia/truth, documentos, propuestas/approval, MCP/seguridad, testing/Doctor. Hallazgos clave: sin modelo Evidence ni TruthLevel, sin MemoryDV/Skills/Doctor, sync sin diff old→new, sin auth en API admin, 0 unit tests.
+- Schema centralizado (integrador): modelos Evidence, ProcessChange, MemoryEntry, SkillContract, Execution, ProviderMetric, AutonomyConfig + extensión Requirement/Approval/AuditEvent (estilo String, sin enums SQLite). db push exitoso, cliente regenerado.
+- WAVE 2 (6 agentes paralelos 2-a..2-f): (2-a) evidence.ts + regla de oro enforceada en ai.ts + Evidence rows + Execution en analyze; (2-b) memory.ts + /api/memory con FACTUAL-exige-evidencia y aislamiento duro; (2-c) skills_registry 11 contratos + validación + métricas; (2-d) doctor/autonomy/observe + /api/doctor /api/health /api/executions + approval con snapshot §19 + 5 tools MCP nuevas (17 total); (2-e) security.ts (rateLimit/timingSafe/ssrfGuard/wrapUserData), XSS denylist, magic bytes audio/video (fix regresión .bin→200), MCP fail-closed, channels pre-buffer checks, tsconfig excludes; (2-f) sync paginación + hash ampliado + diff ProcessChange old→new con impacto + discardReason + TZ Bogotá + deadline fallback.
+- WAVE 3 (3-a testing, 3-b dashboard): unit tests bun (6 archivos, 98 pass), e2e ampliado a fases E/F/G/J (39/39), dashboard Sistema (Doctor/Skills/Memoria/Ejecuciones) + pestaña Evidencia + Historial de cambios, verificado en navegador con capturas.
+- CIERRE: commit 393d647 con todo el trabajo; README actualizado (Evidence/Truth, MemoryDV, Skills, Doctor, Autonomía, tests, variables de entorno documentadas).
+- CLEAN-ROOM (agente 4 + re-ejecución integrador): primera pasada FAIL honesto (trabajo sin commitear + DATABASE_URL relativo bifurcado CLI/standalone + DATABASE_URL global del sandbox). Corregido protocolo: commit previo, .env con ruta absoluta al clon, unset del global. Resultado final: bun install 850 pkgs OK, prisma generate+db push OK, bun run build exit 0, producción :3100 con /, health, dashboard, opportunities, skills, doctor = 200, MCP sin key 503 fail-closed y con key 17 tools, persistencia en clon verificada, BD original intacta, 0 rutas absolutas en chunks. VEREDICTO: CLEAN-ROOM PASS. Clon preservado en /home/z/cleanroom-radar.
+
+Stage Summary:
+- GATES: AUDIT PASS (7 auditores + integración) · TEST PASS (98 unit + 16 sync + 12 security) · E2E PASS (39/39 incl. flujo integral §27 con provenance) · CLEAN-ROOM PASS · SECURITY PASS (12/12 + fail-closed prod) · REGRESSION PASS (e2e A/B/C/D conservados) · EVIDENCE/PROVENANCE PASS (Evidence Contract + regla de oro) · HUMAN APPROVAL PASS (snapshot §19 + 422 regla de oro + force auditado).
+- Capacidades preservadas: ingesta SECOP, filtros, compatibilidad 7D, Marco Lógico, canales, multimodal, MCP (extendido a 17), export Word, dashboard (extendido, no duplicado).
+- Deuda aceptada documentada: tokens de canales en SQLite plano (sandbox), sin auth UI (un solo operador), WhatsApp requiere URL pública para webhook (sandbox usa polling TG).
