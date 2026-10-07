@@ -10,7 +10,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       where: { id },
       include: {
         process: true,
-        requirements: { orderBy: { code: 'asc' } },
+        requirements: { orderBy: { code: 'asc' }, include: { evidences: { orderBy: { createdAt: 'desc' } } } },
+        evidences: { orderBy: { createdAt: 'desc' }, take: 200 },
         proposals: { orderBy: { version: 'desc' }, include: { approvals: { orderBy: { createdAt: 'desc' } } } },
         proposalMessages: { orderBy: { createdAt: 'asc' }, take: 100 },
       },

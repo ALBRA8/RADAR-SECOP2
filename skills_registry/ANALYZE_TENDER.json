@@ -1,0 +1,75 @@
+{
+  "identity": "ANALYZE_TENDER",
+  "version": "1.0.0",
+  "purpose": "Producir el análisis inteligente de una oportunidad: resumen del proceso, matriz de requisitos (REQUISITO|ESTADO|EVIDENCIA|ACCIÓN), riesgos, documentos faltantes y nextAction, usando IA con prompt anti-invención y degradando a análisis basado en reglas si la IA falla.",
+  "trigger": "Se activa cuando el usuario abre el detalle de una oportunidad y pide analizarla, cuando una oportunidad pasa a EN_ANALISIS, o tras DETECT_MODIFICATION para re-analizar un proceso modificado.",
+  "prerequisites": [
+    "La Opportunity existe y está vinculada a su SecopProcess (rawJson disponible para contexto).",
+    "Perfil de empresa cargado (productos, experiencia, documentos) para contrastar requisitos.",
+    "Si se requiere análisis de pliegos: haber ejecutado ANALYZE_DOCUMENT sobre los documentos disponibles."
+  ],
+  "procedure": [
+    "Paso 1: Cargar la Opportunity por id (GET /api/opportunities/[id]) junto con su SecopProcess y perfil de la empresa; validar que exista, si no → 404 honesto.",
+    "Paso 2: Recopilar contexto: objeto, valor, fase, modalidad, fecha de cierre, pliegos analizados (analyzePliegoText) y evidencia existente (Evidence con relatedOpportunityId).",
+    "Paso 3: Ejecutar POST /api/opportunities/[id]/analyze (o MCP analyze_opportunity): la IA recibe el prompt anti-invención que prohibe afirmar certificaciones o experiencia no presentes en el perfil.",
+    "Paso 4: Exigir salida estructurada: analysisSummary, matriz de requisitos (cada fila con code, description, category, obligatoriness, status, truthLevel, evidence, action), risks, missingDocs y nextAction.",
+    "Paso 5: Persistir: Opportunity.status → EN_ANALISIS, analysisSummary, risksJson, missingDocsJson, nextAction; filas de matriz en Requirement con truthLevel por requisito.",
+    "Paso 6: Si la IA falla o devuelve JSON inválido, degradar al fallback basado en reglas y marcar en la respuesta engine='REGLAS' (nunca presentar el fallback como análisis IA).",
+    "Paso 7: Registrar Execution (operation ANALYZE_OPPORTUNITY, skillIdentity ANALYZE_TENDER, latencyMs, status) y responder con el análisis completo."
+  ],
+  "tools_required": [
+    "POST /api/opportunities/[id]/analyze",
+    "MCP: analyze_opportunity",
+    "MCP: get_opportunity",
+    "MCP: get_company_profile",
+    "Skill: ANALYZE_DOCUMENT (para contexto de pliegos)",
+    "Modelo: src/lib/ai.ts (z-ai-web-dev-sdk, backend only, con fallback a reglas)"
+  ],
+  "expected_result": "Opportunity en EN_ANALISIS con analysisSummary, matriz de requisitos persistida en Requirement (con category y truthLevel por fila), risksJson y missingDocsJson poblados, nextAction concreta y Execution ANALYZE_OPPORTUNITY registrada; respuesta indica si el engine fue IA o REGLAS.",
+  "verification": {
+    "metodo": "Inspección de la respuesta y de la persistencia.",
+    "pasos": [
+      "GET /api/opportunities/[id] muestra status=EN_ANALISIS y analysisSummary no vacío.",
+      "Cada Requirement tiene status en {CUMPLE, NO_CUMPLE, PENDIENTE, REQUIERE_REVISION} y truthLevel en {VERIFIED, OBSERVED, INFERRED, ESTIMATED, UNKNOWN}.",
+      "Ninguna afirmación sobre certificaciones/experiencia carece de Evidence o referencia al perfil (spot-check anti-invención).",
+      "Execution operation=ANALYZE_OPPORTUNITY con skillIdentity=ANALYZE_TENDER existe con status SUCCESS o PARTIAL."
+    ]
+  },
+  "pitfalls": [
+    "Presentar el fallback de reglas como si fuera análisis IA (engaño de engine).",
+    "Permitir que la IA invente requisitos que no están en el objeto ni en pliegos analizados.",
+    "Asignar CUMPLE apoyándose solo en inferencia del LLM (viola la regla de oro de VERIFY_REQUIREMENT).",
+    "Analizar sin pliegos y reportar certeza alta: la matriz debe quedar con truthLevel INFERRED/UNKNOWN y estados PENDIENTE/REQUIERE_REVISION.",
+    "Olvidar persistir la matriz en Requirement y dejarla solo en la respuesta HTTP (no reproducible)."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "Evidence (relatedOpportunityId) + Execution + AuditEvent",
+    "truthLevels": {
+      "datos_del_proceso_SECOP": "OBSERVED",
+      "contenido_de_pliegos": "OBSERVED",
+      "lecturas_del_LLM_sobre_pliegos": "INFERRED",
+      "datos_del_perfil_empresa": "VERIFIED"
+    },
+    "regla": "Toda fila de la matriz con afirmación importante debe citar su fuente: perfil (VERIFIED), pliego/proceso (OBSERVED) o lectura IA (INFERRED). El resumen debe declarar engine usado y las limitaciones si faltó documentación.",
+    "campos_obligatorios_provenance": ["source", "sourceType", "extractedFact", "confidence", "truthLevel", "provenanceJson"]
+  },
+  "regression_tests": [
+    {
+      "input": { "action": "POST /api/opportunities/{id}/analyze", "id_valido": true },
+      "expected": { "status": 200, "engine": "IA|REGLAS", "matriz_no_vacia": true, "status_opportunity": "EN_ANALISIS" }
+    },
+    {
+      "input": { "action": "POST /api/opportunities/{id}/analyze", "id_inexistente": "cuid_falso" },
+      "expected": { "status": 404, "error": "identifica la oportunidad" }
+    },
+    {
+      "input": { "escenario": "IA devuelve JSON inválido" },
+      "expected": { "engine": "REGLAS", "matriz_basada_en_reglas": true, "aviso_de_degradacion": true }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

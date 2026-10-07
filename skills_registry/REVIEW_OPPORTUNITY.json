@@ -1,0 +1,71 @@
+{
+  "identity": "REVIEW_OPPORTUNITY",
+  "version": "1.0.0",
+  "purpose": "Ejecutar la revisión integral previa a la aprobación humana: consolidar análisis, compatibilidad, requisitos verificados, evidencia, cambios del proceso y borrador de propuesta en un resumen de decisión honesto (incluyendo unconfirmedCount y limitaciones), para que el aprobador decida con el panorama completo.",
+  "trigger": "Se activa cuando el usuario abre el flujo de aprobación de una propuesta, pide 'resumen para aprobar', o cuando un cambio ALTA del proceso (DETECT_MODIFICATION) obliga a re-revisar antes de continuar.",
+  "prerequisites": [
+    "Opportunity con análisis vigente (ANALYZE_TENDER) y evaluación de compatibilidad (EVALUATE_COMPATIBILITY).",
+    "Proposal BORRADOR asociada con unconfirmedCount calculado.",
+    "Evidencia y requisitos cargados (VERIFICATION previa); acceso de lectura a ProcessChange del proceso."
+  ],
+  "procedure": [
+    "Paso 1: Consolidar la ficha de la oportunidad: entidad, objeto, valor, fechas críticas (cierre) y estado actual en SECOP.",
+    "Paso 2: Resumir compatibilidad: score determinístico con las 7 dimensiones y sus razones (reasonsJson), distinguiéndolo de cualquier juicio IA.",
+    "Paso 3: Consolidar requisitos: conteo por status (CUMPLE/NO_CUMPLE/PENDIENTE/REQUIERE_REVISION) y listado de los bloqueantes (HABILITANTE no cumplidos) con su evidencia.",
+    "Paso 4: Revisar integridad: cambios del proceso (ProcessChange recientes con old→new), evidencia contradictoria (verificationStatus CONTRADICTED), documentos faltantes y engine usado en cada análisis (IA vs REGLAS).",
+    "Paso 5: Revisar el borrador de propuesta: version, secciones con POR CONFIRMAR, unconfirmedCount y Marco Lógico presente/ausente; verificar que no existan afirmaciones sin respaldo.",
+    "Paso 6: Emitir el veredicto estructurado de revisión: lista de riesgos, datos por confirmar, plazo disponible y recomendación explícita de revisión humana; NUNCA aprobar automáticamente: la decisión corresponde al humano (autonomía L2), quien dejará Approval con snapshot de trazabilidad."
+  ],
+  "tools_required": [
+    "MCP: get_opportunity, get_inbox, get_dashboard_stats",
+    "Tablas: Opportunity, Requirement, Evidence, ProcessChange, Proposal, Approval",
+    "Skills upstream: ANALYZE_TENDER, EVALUATE_COMPATIBILITY, VERIFY_REQUIREMENT, DETECT_MODIFICATION, PREPARE_PROPOSAL",
+    "Frontend: diálogo de aprobación (APROBADA/RECHAZADA con notas)"
+  ],
+  "expected_result": "Resumen de revisión completo y honesto: riesgos, bloqueantes habilitantes, datos POR CONFIRMAR, cambios recientes del proceso y recomendación; el aprobador puede decidir sin revisar N pantallas; ninguna aprobación automática emitida por el agente.",
+  "verification": {
+    "metodo": "Consistencia del resumen contra las fuentes.",
+    "pasos": [
+      "El conteo de requisitos por status coincide con la tabla Requirement.",
+      "Los cambios de proceso listados coinciden con ProcessChange (fechas y campos).",
+      "unconfirmedCount del resumen = marcadores POR CONFIRMAR del borrador vigente.",
+      "El veredicto menciona explícitamente las limitaciones (engine fallback, evidencia INFERRED, pliegos no extraídos)."
+    ]
+  },
+  "pitfalls": [
+    "Presentar un resumen optimista ocultando requisitos HABILITANTE pendientes.",
+    "Omitir cambios ALTA recientes del proceso (el aprobador decide con datos viejos).",
+    "Confundir el score determinístico con una garantía de adjudicación.",
+    "Empujar al usuario a aprobar: la skill informa, no persuade; la decisión es humana.",
+    "Revisar sin verificar que el análisis sigue vigente tras una modificación del proceso."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "AuditEvent (revisión ejecutada) + Approval.snapshotJson (al aprobar) + Evidence ya existente",
+    "truthLevels": {
+      "datos_consolidados_de_tablas": "OBSERVED",
+      "recomendacion_de_revision": "INFERRED",
+      "score_de_compatibilidad": "VERIFIED"
+    },
+    "regla": "El resumen solo consolida hechos ya registrados (no genera afirmaciones nuevas); la recomendación es INFERRED y se presenta como opinión del agente; al aprobar, el snapshotJson congela requisitos con status/truthLevel, hash de secciones y score para trazabilidad posterior.",
+    "campos_obligatorios_provenance": ["fuentes por sección", "unconfirmedCount", "engine", "snapshotJson en Approval"]
+  },
+  "regression_tests": [
+    {
+      "input": { "escenario": "oportunidad con 2 requisitos HABILITANTE PENDIENTE" },
+      "expected": { "bloqueantes_habilitantes": 2, "recomendacion": "no aprobar sin resolver", "sin_emoji_optimista": true }
+    },
+    {
+      "input": { "escenario": "proceso con cambio ALTA hace 1 día" },
+      "expected": { "cambios_listados": true, "old_new_visible": true, "aviso_de_re_analisis": true }
+    },
+    {
+      "input": { "escenario": "aprobación humana ejecutada" },
+      "expected": { "approval_con_snapshotJson": true, "decision_humana_registrada": true, "sin_autoaprobacion_del_agente": true }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

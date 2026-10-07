@@ -1,0 +1,73 @@
+{
+  "identity": "ANALYZE_DOCUMENT",
+  "version": "1.0.0",
+  "purpose": "Analizar pliegos, anexos y otros documentos multimodales (PDF, imagen, audio, video) extraídos del sistema de archivos, produciendo un análisis estructurado con degradación honesta: si la extracción de texto falla o viene vacía, se declara explícitamente y no se inventa contenido.",
+  "trigger": "Se activa cuando el usuario sube un pliego/anexo vía /api/media/analyze, cuando un canal recibe un documento (Telegram/WhatsApp), o cuando ANALYZE_TENDER necesita el contenido de los pliegos.",
+  "prerequisites": [
+    "Archivo presente en /uploads (registrado por el módulo de media) con mimeType válido.",
+    "Magic bytes verificados: PDF (%PDF) o imagen JPEG/PNG/WebP/GIF/BMP; un .bin renombrado debe rechazarse con 400.",
+    "Para PDFs escaneados (sin texto embebido): disponibilidad del extractor de imágenes/OCR o aceptar la degradación honesta."
+  ],
+  "procedure": [
+    "Paso 1: Validar el archivo: existencia en disco, tamaño dentro del límite (25MB) y magic bytes coherentes con el mimeType; si falla → error 400 claro, nunca análisis sobre basura.",
+    "Paso 2: Extraer contenido según tipo: PDF → extractPdfText (texto + páginas); imagen → analyzeImage (visión); audio → transcribeAudio (ASR); video → analyzeVideo.",
+    "Paso 3: Para pliegos PDF, ejecutar analyzePliegoText sobre el texto extraído: estructura del pliego, requisitos detectados, fechas clave, criterios de evaluación y sanciones.",
+    "Paso 4: Aplicar degradación honesta: si el PDF no cede texto (escaneado) o el extractor devuelve texto vacío/mínimo, devolver resultado explícito {extracted: false, reason: 'PDF probablemente escaneado'} sin inventar requisitos.",
+    "Paso 5: Persistir el análisis en la fila de media/canal correspondiente (analysis, transcript) y derivar hallazgos hacia EXTRACT_REQUIREMENTS/COLLECT_EVIDENCE cuando alimente una oportunidad.",
+    "Paso 6: Responder con: tipo de medio, páginas/segundos procesados, texto o transcripción (o su ausencia declarada), análisis estructurado y limitaciones detectadas; registrar ProviderMetric y Execution (ANALYZE_MEDIA)."
+  ],
+  "tools_required": [
+    "POST /api/media/analyze",
+    "MCP: analyze_pliego_text",
+    "Extractores: extractPdfText, analyzeImage, transcribeAudio, analyzeVideo (src/lib/media.ts)",
+    "ProviderMetric (proveedores VISION_ZAI, ASR_ZAI, LLM_ZAI)",
+    "Tablas: ChannelMessage (análisis en bandeja de canales)"
+  ],
+  "expected_result": "Análisis del documento con contenido real extraído (texto/transcripción/visión) o declaración explícita de imposibilidad de extracción; cero contenido inventado; hallazgos de pliego estructurados y disponibles para las skills downstream; métricas de proveedor registradas.",
+  "verification": {
+    "metodo": "Pruebas con documentos reales y adversariales.",
+    "pasos": [
+      "PDF textual real → extracted=true, análisis cita secciones reales del documento.",
+      "PDF escaneado → extracted=false con reason explícita, matriz vacía pero respuesta 200 honesta.",
+      "Archivo .bin renombrado a .pdf → 400 por magic bytes (no 200 con análisis falso).",
+      "ProviderMetric registrada con latencia y ok=true/false del proveedor usado."
+    ]
+  },
+  "pitfalls": [
+    "Presentar el mensaje de degradación como si fuera análisis ('el pliego no contiene requisitos' cuando no se pudo extraer texto).",
+    "Confiar en la extensión del archivo en vez de los magic bytes.",
+    "Procesar PDFs de decenas de MB y agotar memoria (respetar límite 25MB).",
+    "Perder la asociación documento↔opportunitad/requisito (análisis huérfano).",
+    "Ocultar páginas procesadas: el usuario necesita saber cuánto material se leyó realmente."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "Evidence (source=PLIEGO_PDF|ANEXO|IMAGEN|AUDIO|VIDEO) + tabla de media/ChannelMessage + ProviderMetric",
+    "truthLevels": {
+      "texto_extraido_literal": "OBSERVED",
+      "transcripcion_ASR": "OBSERVED",
+      "lectura_visual_IA": "INFERRED",
+      "analisis_estructurado_del_pliego": "INFERRED"
+    },
+    "regla": "El texto extraído es OBSERVED; la interpretación estructurada del LLM sobre ese texto es INFERRED y debe viajar etiquetada; cuando no hay extracción, la respuesta lo declara y no se registra evidencia apócrifa; provenanceJson incluye páginas, extractor y hash del archivo.",
+    "campos_obligatorios_provenance": ["source", "sourceType=DOCUMENT|IMAGE|AUDIO|VIDEO", "sourceDocId", "provenanceJson (páginas/extractor/hash)"]
+  },
+  "regression_tests": [
+    {
+      "input": { "archivo": "pliego_textual.pdf", "magic_bytes": "%PDF" },
+      "expected": { "status": 200, "extracted": true, "analisis_con_citas_reales": true }
+    },
+    {
+      "input": { "archivo": "audit_7c_bad.bin", "renombrado_a": ".pdf" },
+      "expected": { "status": 400, "razon": "magic bytes inválidos", "sin_analisis_falso": true }
+    },
+    {
+      "input": { "archivo": "pliego_escaneado.pdf", "texto_extraible": false },
+      "expected": { "status": 200, "extracted": false, "reason_degradacion_honesta": true, "requisitos_inventados": 0 }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

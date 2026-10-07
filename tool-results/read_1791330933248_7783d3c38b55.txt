@@ -1,0 +1,760 @@
+     1→'use client'
+     2→
+     3→import { useState, useEffect, useRef } from 'react'
+     4→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+     5→import { Button } from '@/components/ui/button'
+     6→import { Badge } from '@/components/ui/badge'
+     7→import { Separator } from '@/components/ui/separator'
+     8→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+     9→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+    10→import { Input } from '@/components/ui/input'
+    11→import { Label } from '@/components/ui/label'
+    12→import { Textarea } from '@/components/ui/textarea'
+    13→import { StatusBadge, ScoreBadge, DimIcon, ReqStatusBadge, UnconfirmedWarn, Spinner } from './shared'
+    14→import {
+    15→  fmtCOP, fmtDate, fmtDateTime, daysUntil,
+    16→  DIM_COLORS,
+    17→  type OpportunityData, type ProposalData, type ProposalMessageData, type MarcoLogicoData,
+    18→} from './client-types'
+    19→import {
+    20→  ArrowLeft, ExternalLink, Landmark, Calendar, Tag, Clock,
+    21→  FilePlus2, Ban, CheckCircle2, Building2, UserCheck, FileCheck2, ShieldAlert, FileText,
+    22→  MessagesSquare, Send, Bot, User, Network, Download,
+    23→} from 'lucide-react'
+    24→import { useToast } from '@/hooks/use-toast'
+    25→
+    26→export function OpportunityDetailView({
+    27→  opportunity,
+    28→  loading,
+    29→  onBack,
+    30→  onAnalyze,
+    31→  onDiscard,
+    32→  onApprovePrep,
+    33→  onGenerateProposal,
+    34→  onApproveProposal,
+    35→  onRefineProposal,
+    36→  analyzing,
+    37→  generating,
+    38→  refining,
+    39→}: {
+    40→  opportunity: OpportunityData | null
+    41→  loading: boolean
+    42→  onBack: () => void
+    43→  onAnalyze: (id: string) => void
+    44→  onDiscard: (id: string, reason: string) => void
+    45→  onApprovePrep: (id: string) => void
+    46→  onGenerateProposal: (opportunityId: string) => void
+    47→  onApproveProposal: (proposalId: string, decision: 'APROBADA' | 'RECHAZADA', approver: string, notes: string) => void
+    48→  onRefineProposal: (proposalId: string, instruction: string) => void
+    49→  analyzing: boolean
+    50→  generating: boolean
+    51→  refining: boolean
+    52→}) {
+    53→  const { toast } = useToast()
+    54→  const [discardOpen, setDiscardOpen] = useState(false)
+    55→  const [discardReason, setDiscardReason] = useState('')
+    56→  const [approveOpen, setApproveOpen] = useState<ProposalData | null>(null)
+    57→  const [approver, setApprover] = useState('')
+    58→  const [approverNotes, setApproverNotes] = useState('')
+    59→
+    60→  if (loading) return <Spinner label="Cargando expediente…" />
+    61→  if (!opportunity) return <p className="py-10 text-center text-muted-foreground">No se encontró la oportunidad.</p>
+    62→
+    63→  const o = opportunity
+    64→  const p = o.process
+    65→  const dDeadline = daysUntil(p.receptionDate)
+    66→  const latestProposal = o.proposals && o.proposals.length > 0 ? o.proposals[0] : null
+    67→  const active = o.status !== 'DESCARTADA'
+    68→
+    69→  const submitDiscard = () => {
+    70→    if (!discardReason.trim()) {
+    71→      toast({ title: 'El motivo del descarte es obligatorio', variant: 'destructive' })
+    72→      return
+    73→    }
+    74→    setDiscardOpen(false)
+    75→    onDiscard(o.id, discardReason.trim())
+    76→    setDiscardReason('')
+    77→  }
+    78→
+    79→  const submitApproval = () => {
+    80→    if (!approveOpen) return
+    81→    if (!approver.trim()) {
+    82→      toast({ title: 'Registra el nombre del aprobador', variant: 'destructive' })
+    83→      return
+    84→    }
+    85→    onApproveProposal(approveOpen.id, 'APROBADA', approver.trim(), approverNotes.trim())
+    86→    setApproveOpen(null)
+    87→    setApprover('')
+    88→    setApproverNotes('')
+    89→  }
+    90→
+    91→  return (
+    92→    <div className="space-y-5">
+    93→      {/* Cabecera */}
+    94→      <div>
+    95→        <Button variant="ghost" size="sm" onClick={onBack} className="mb-3 min-h-9">
+    96→          <ArrowLeft className="w-4 h-4 mr-1.5" aria-hidden /> Volver a oportunidades
+    97→        </Button>
+    98→        <Card>
+    99→          <CardContent className="p-5">
+   100→            <div className="flex flex-col lg:flex-row gap-4">
+   101→              <div className="flex gap-3 items-start shrink-0">
+   102→                <ScoreBadge score={o.score} size="lg" />
+   103→              </div>
+   104→              <div className="flex-1 min-w-0">
+   105→                <div className="flex flex-wrap items-center gap-2">
+   106→                  <span className="font-mono text-xs bg-muted rounded px-1.5 py-0.5">{p.id}</span>
+   107→                  <StatusBadge status={o.status} />
+   108→                  {p.reference && <span className="text-xs text-muted-foreground">Ref.: {p.reference}</span>}
+   109→                </div>
+   110→                <h2 className="text-lg font-semibold mt-1.5 leading-snug">{p.objectName}</h2>
+   111→                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2 mt-3 text-sm">
+   112→                  <InfoItem icon={Landmark} label="Entidad" value={p.entity} />
+   113→                  <InfoItem icon={Building2} label="Ubicación" value={`${p.city || '—'} / ${p.department || '—'}`} />
+   114→                  <InfoItem icon={Tag} label="Valor base" value={fmtCOP(p.basePrice)} strong />
+   115→                  <InfoItem icon={Calendar} label="Publicación" value={fmtDate(p.publishDate)} />
+   116→                  <InfoItem icon={Clock} label="Duración" value={p.duration ? `${p.duration} ${p.durationUnit || ''}` : 'No publicada'} />
+   117→                  <InfoItem icon={FileCheck2} label="Modalidad" value={p.modality || '—'} />
+   118→                  <InfoItem icon={FileCheck2} label="Tipo de contrato" value={p.contractType || '—'} />
+   119→                  <InfoItem
+   120→                    icon={ShieldAlert}
+   121→                    label="Recepción de respuestas"
+   122→                    value={
+   123→                      p.receptionDate
+   124→                        ? `${fmtDate(p.receptionDate)}${dDeadline != null ? ` (${dDeadline} día(s))` : ''}`
+   125→                        : 'No publicada — verificar en SECOP'
+   126→                    }
+   127→                    strong={dDeadline != null && dDeadline <= 7}
+   128→                  />
+   129→                </div>
+   130→                {p.description && (
+   131→                  <div className="mt-3">
+   132→                    <Separator className="mb-3" />
+   133→                    <p className="text-sm text-muted-foreground leading-relaxed">{p.description}</p>
+   134→                  </div>
+   135→                )}
+   136→                <div className="flex flex-wrap gap-2 mt-4">
+   137→                  {p.url && (
+   138→                    <a href={p.url} target="_blank" rel="noopener noreferrer" tabIndex={0}>
+   139→                      <Button size="sm" variant="outline" className="min-h-9">
+   140→                        <ExternalLink className="w-4 h-4 mr-1.5" aria-hidden /> Ver en SECOP
+   141→                      </Button>
+   142→                    </a>
+   143→                  )}
+   144→                  {active && (o.status === 'NUEVA' || o.status === 'COMPATIBLE' || o.status === 'EN_ANALISIS') && (
+   145→                    <Button size="sm" onClick={() => onAnalyze(o.id)} disabled={analyzing} className="bg-emerald-600 hover:bg-emerald-700 min-h-9">
+   146→                      <FilePlus2 className="w-4 h-4 mr-1.5" aria-hidden />
+   147→                      {analyzing ? 'Analizando con IA…' : o.requirements && o.requirements.length > 0 ? 'Re-analizar con IA' : 'Analizar con IA'}
+   148→                    </Button>
+   149→                  )}
+   150→                  {active && o.status === 'COMPATIBLE' && (
+   151→                    <Button size="sm" variant="outline" onClick={() => onApprovePrep(o.id)} className="border-lime-500 text-lime-700 hover:bg-lime-50 min-h-9">
+   152→                      <CheckCircle2 className="w-4 h-4 mr-1.5" aria-hidden /> Aprobar para preparación
+   153→                    </Button>
+   154→                  )}
+   155→                  {active && o.status === 'APROBADA_PREPARACION' && (
+   156→                    <Button size="sm" onClick={() => onGenerateProposal(o.id)} disabled={generating} className="bg-lime-600 hover:bg-lime-700 min-h-9">
+   157→                      <FileText className={`w-4 h-4 mr-1.5 ${generating ? 'animate-pulse' : ''}`} aria-hidden />
+   158→                      {generating ? 'Generando borrador…' : latestProposal ? 'Generar nueva versión' : 'Generar borrador de propuesta'}
+   159→                    </Button>
+   160→                  )}
+   161→                  {active && (
+   162→                    <Button size="sm" variant="outline" onClick={() => setDiscardOpen(true)} className="border-rose-300 text-rose-700 hover:bg-rose-50 min-h-9">
+   163→                      <Ban className="w-4 h-4 mr-1.5" aria-hidden /> Descartar
+   164→                    </Button>
+   165→                  )}
+   166→                </div>
+   167→                {o.status === 'DESCARTADA' && o.discardReason && (
+   168→                  <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-3 py-2 mt-3">
+   169→                    Descartada: {o.discardReason}
+   170→                  </p>
+   171→                )}
+   172→              </div>
+   173→            </div>
+   174→          </CardContent>
+   175→        </Card>
+   176→      </div>
+   177→
+   178→      <Tabs defaultValue="compatibilidad">
+   179→        <TabsList className="w-full sm:w-auto flex-wrap h-auto">
+   180→          <TabsTrigger value="compatibilidad">Compatibilidad explicada</TabsTrigger>
+   181→          <TabsTrigger value="matriz">Matriz de requisitos</TabsTrigger>
+   182→          <TabsTrigger value="riesgos">Riesgos y faltantes</TabsTrigger>
+   183→          <TabsTrigger value="propuesta">Propuesta {latestProposal ? `· v${latestProposal.version}` : ''}</TabsTrigger>
+   184→        </TabsList>
+   185→
+   186→        {/* Compatibilidad */}
+   187→        <TabsContent value="compatibilidad" className="mt-4 space-y-4">
+   188→          {o.analysisSummary && (
+   189→            <Card>
+   190→              <CardContent className="p-4">
+   191→                <p className="text-sm leading-relaxed">{o.analysisSummary}</p>
+   192→              </CardContent>
+   193→            </Card>
+   194→          )}
+   195→          <Card>
+   196→            <CardHeader className="pb-2">
+   197→              <CardTitle className="text-base">¿Por qué esta oportunidad es (o no) compatible?</CardTitle>
+   198→              <p className="text-sm text-muted-foreground">Cada dimensión se evalúa contra el perfil registrado de la empresa. El sistema muestra las razones, no solo el porcentaje.</p>
+   199→            </CardHeader>
+   200→            <CardContent className="space-y-3">
+   201→              {o.reasons.length === 0 && <p className="text-sm text-muted-foreground">Ejecuta una sincronización para recalcular la compatibilidad.</p>}
+   202→              {o.reasons.map((d) => (
+   203→                <div key={d.key} className="flex items-start gap-3 rounded-lg border p-3">
+   204→                  <DimIcon result={d.result} />
+   205→                  <div className="flex-1 min-w-0">
+   206→                    <div className="flex flex-wrap items-center justify-between gap-2">
+   207→                      <p className="font-medium text-sm">{d.label}</p>
+   208→                      <Badge variant="secondary" className="text-[11px]">
+   209→                        peso {Math.round(d.weight * 100)}% · {Math.round(d.score * 100)}%
+   210→                      </Badge>
+   211→                    </div>
+   212→                    <p className={`text-sm mt-0.5 ${DIM_COLORS[d.result]}`}>{d.reason}</p>
+   213→                  </div>
+   214→                </div>
+   215→              ))}
+   216→            </CardContent>
+   217→          </Card>
+   218→        </TabsContent>
+   219→
+   220→        {/* Matriz de requisitos */}
+   221→        <TabsContent value="matriz" className="mt-4">
+   222→          <Card>
+   223→            <CardHeader className="pb-2">
+   224→              <CardTitle className="text-base">Matriz de cumplimiento</CardTitle>
+   225→              <p className="text-sm text-muted-foreground">
+   226→                REQUISITO | ESTADO | EVIDENCIA | ACCIÓN — construida con la evidencia registrada de la empresa. Nada se marca «Cumple» sin sustento.
+   227→              </p>
+   228→            </CardHeader>
+   229→            <CardContent>
+   230→              {!o.requirements || o.requirements.length === 0 ? (
+   231→                <p className="text-sm text-muted-foreground py-4">
+   232→                  Aún no hay matriz. Usa «Analizar con IA» para generarla.
+   233→                </p>
+   234→              ) : (
+   235→                <div className="overflow-x-auto">
+   236→                  <table className="w-full text-sm border-collapse">
+   237→                    <thead>
+   238→                      <tr className="border-b text-left text-xs text-muted-foreground uppercase tracking-wide">
+   239→                        <th className="py-2 pr-3 font-medium">Requisito</th>
+   240→                        <th className="py-2 pr-3 font-medium">Estado</th>
+   241→                        <th className="py-2 pr-3 font-medium">Evidencia</th>
+   242→                        <th className="py-2 font-medium">Acción</th>
+   243→                      </tr>
+   244→                    </thead>
+   245→                    <tbody>
+   246→                      {o.requirements.map((r) => (
+   247→                        <tr key={r.id} className="border-b last:border-0 align-top">
+   248→                          <td className="py-3 pr-3">
+   249→                            <span className="font-mono text-xs text-muted-foreground mr-1.5">{r.code}</span>
+   250→                            {r.description}
+   251→                            <Badge variant="secondary" className="ml-2 text-[10px]">{r.source === 'IA' ? 'IA' : 'Reglas'}</Badge>
+   252→                          </td>
+   253→                          <td className="py-3 pr-3"><ReqStatusBadge status={r.status} /></td>
+   254→                          <td className="py-3 pr-3 text-muted-foreground">{r.evidence || '—'}</td>
+   255→                          <td className="py-3 text-muted-foreground">{r.action || '—'}</td>
+   256→                        </tr>
+   257→                      ))}
+   258→                    </tbody>
+   259→                  </table>
+   260→                </div>
+   261→              )}
+   262→            </CardContent>
+   263→          </Card>
+   264→        </TabsContent>
+   265→
+   266→        {/* Riesgos */}
+   267→        <TabsContent value="riesgos" className="mt-4 grid md:grid-cols-2 gap-4">
+   268→          <Card>
+   269→            <CardHeader className="pb-2">
+   270→              <CardTitle className="text-base flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-rose-600" aria-hidden /> Riesgos identificados</CardTitle>
+   271→            </CardHeader>
+   272→            <CardContent>
+   273→              {o.risks.length === 0 ? (
+   274→                <p className="text-sm text-muted-foreground">Sin riesgos registrados en el último análisis.</p>
+   275→              ) : (
+   276→                <ul className="space-y-2">
+   277→                  {o.risks.map((r, i) => (
+   278→                    <li key={i} className="text-sm rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-rose-900">{r}</li>
+   279→                  ))}
+   280→                </ul>
+   281→              )}
+   282→            </CardContent>
+   283→          </Card>
+   284→          <Card>
+   285→            <CardHeader className="pb-2">
+   286→              <CardTitle className="text-base flex items-center gap-2"><FileCheck2 className="w-4 h-4 text-amber-600" aria-hidden /> Documentos faltantes</CardTitle>
+   287→            </CardHeader>
+   288→            <CardContent>
+   289→              {o.missingDocs.length === 0 ? (
+   290→                <p className="text-sm text-muted-foreground">No se detectaron documentos faltantes en el expediente de la empresa.</p>
+   291→              ) : (
+   292→                <ul className="space-y-2">
+   293→                  {o.missingDocs.map((d, i) => (
+   294→                    <li key={i} className="text-sm rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">{d}</li>
+   295→                  ))}
+   296→                </ul>
+   297→              )}
+   298→              {o.nextAction && (
+   299→                <>
+   300→                  <Separator className="my-3" />
+   301→                  <p className="text-sm"><strong>Siguiente acción:</strong> {o.nextAction}</p>
+   302→                </>
+   303→              )}
+   304→            </CardContent>
+   305→          </Card>
+   306→        </TabsContent>
+   307→
+   308→        {/* Propuesta */}
+   309→        <TabsContent value="propuesta" className="mt-4 space-y-4">
+   310→          {o.status !== 'APROBADA_PREPARACION' ? (
+   311→            <Card>
+   312→              <CardContent className="p-6 text-center">
+   313→                <FileText className="w-8 h-8 mx-auto text-muted-foreground" aria-hidden />
+   314→                <p className="mt-2 font-medium">La propuesta se genera después de la aprobación humana</p>
+   315→                <p className="text-sm text-muted-foreground mt-1 max-w-lg mx-auto">
+   316→                  Cuando la oportunidad esté analizada y quieras prepararla, apruébala para preparación (Módulo H). Así queda trazabilidad de quién autorizó cada paso.
+   317→                </p>
+   318→              </CardContent>
+   319→            </Card>
+   320→          ) : !latestProposal ? (
+   321→            <Card>
+   322→              <CardContent className="p-6 text-center">
+   323→                <FileText className="w-8 h-8 mx-auto text-muted-foreground" aria-hidden />
+   324→                <p className="mt-2 font-medium">Oportunidad aprobada — lista para preparar</p>
+   325→                <p className="text-sm text-muted-foreground mt-1">Genera el borrador: el agente usará únicamente la información registrada de la empresa y marcará lo pendiente.</p>
+   326→                <Button onClick={() => onGenerateProposal(o.id)} disabled={generating} className="mt-4 bg-lime-600 hover:bg-lime-700 min-h-11">
+   327→                  <FileText className="w-4 h-4 mr-2" aria-hidden /> {generating ? 'Generando…' : 'Generar borrador'}
+   328→                </Button>
+   329→              </CardContent>
+   330→            </Card>
+   331→          ) : (
+   332→            <ProposalPanel
+   333→              proposal={latestProposal}
+   334→              messages={o.messages || []}
+   335→              generating={generating}
+   336→              refining={refining}
+   337→              onGenerate={() => onGenerateProposal(o.id)}
+   338→              onApprove={() => setApproveOpen(latestProposal)}
+   339→              onReject={(notes) => onApproveProposal(latestProposal.id, 'RECHAZADA', approver || 'Responsable', notes)}
+   340→              onRefine={(instruction) => onRefineProposal(latestProposal.id, instruction)}
+   341→            />
+   342→          )}
+   343→        </TabsContent>
+   344→      </Tabs>
+   345→
+   346→      {/* Diálogo descarte */}
+   347→      <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+   348→        <DialogContent>
+   349→          <DialogHeader>
+   350→            <DialogTitle>Descartar oportunidad</DialogTitle>
+   351→          </DialogHeader>
+   352→          <div className="space-y-2">
+   353→            <Label htmlFor="motivo">Motivo del descarte (obligatorio, queda en auditoría)</Label>
+   354→            <Textarea id="motivo" value={discardReason} onChange={(e) => setDiscardReason(e.target.value)} placeholder="Ej.: fuera de la cobertura geográfica del área operativa…" rows={3} />
+   355→          </div>
+   356→          <DialogFooter>
+   357→            <Button variant="outline" onClick={() => setDiscardOpen(false)}>Cancelar</Button>
+   358→            <Button variant="destructive" onClick={submitDiscard}>Descartar</Button>
+   359→          </DialogFooter>
+   360→        </DialogContent>
+   361→      </Dialog>
+   362→
+   363→      {/* Diálogo aprobación */}
+   364→      <Dialog open={!!approveOpen} onOpenChange={(open) => !open && setApproveOpen(null)}>
+   365→        <DialogContent>
+   366→          <DialogHeader>
+   367→            <DialogTitle>Aprobación de la propuesta (Módulo H)</DialogTitle>
+   368→          </DialogHeader>
+   369→          <div className="space-y-3">
+   370→            <p className="text-sm text-muted-foreground">
+   371→              Al aprobar declaras que revisaste la matriz de requisitos, los documentos y el borrador. La decisión queda registrada con fecha y responsable.
+   372→            </p>
+   373→            <div className="space-y-1.5">
+   374→              <Label htmlFor="aprobador">Nombre del responsable que aprueba</Label>
+   375→              <Input id="aprobador" value={approver} onChange={(e) => setApprover(e.target.value)} placeholder="Ej.: María Gómez — Gerente" />
+   376→            </div>
+   377→            <div className="space-y-1.5">
+   378→              <Label htmlFor="notas">Notas (opcional)</Label>
+   379→              <Textarea id="notas" value={approverNotes} onChange={(e) => setApproverNotes(e.target.value)} rows={2} placeholder="Condiciones confirmadas, precio aprobado, etc." />
+   380→            </div>
+   381→          </div>
+   382→          <DialogFooter className="sm:justify-between">
+   383→            <Button
+   384→              variant="outline"
+   385→              className="border-rose-300 text-rose-700 hover:bg-rose-50"
+   386→              onClick={() => {
+   387→                if (!approveOpen) return
+   388→                onApproveProposal(approveOpen.id, 'RECHAZADA', approver.trim() || 'Responsable', approverNotes.trim() || 'Devuelta para ajustes')
+   389→                setApproveOpen(null)
+   390→                setApprover('')
+   391→                setApproverNotes('')
+   392→              }}
+   393→            >
+   394→              <Ban className="w-4 h-4 mr-1.5" aria-hidden /> Devolver para ajustes
+   395→            </Button>
+   396→            <div className="flex gap-2">
+   397→              <Button variant="outline" onClick={() => setApproveOpen(null)}>Cancelar</Button>
+   398→              <Button onClick={submitApproval} className="bg-emerald-600 hover:bg-emerald-700">
+   399→                <UserCheck className="w-4 h-4 mr-1.5" aria-hidden /> Aprobar propuesta
+   400→              </Button>
+   401→            </div>
+   402→          </DialogFooter>
+   403→        </DialogContent>
+   404→      </Dialog>
+   405→    </div>
+   406→  )
+   407→}
+   408→
+   409→function InfoItem({ icon: Icon, label, value, strong }: { icon: typeof Landmark; label: string; value: string; strong?: boolean }) {
+   410→  return (
+   411→    <div className="flex items-start gap-2 min-w-0">
+   412→      <Icon className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" aria-hidden />
+   413→      <div className="min-w-0">
+   414→        <p className="text-xs text-muted-foreground">{label}</p>
+   415→        <p className={`text-sm leading-snug ${strong ? 'font-semibold' : 'font-medium'} break-words`}>{value}</p>
+   416→      </div>
+   417→    </div>
+   418→  )
+   419→}
+   420→
+   421→/** Matriz de Marco Lógico: árbol de problemas → objetivos + tabla Fin/Propósito/Componentes/Actividades. */
+   422→function MarcoLogicoCard({ marcoLogico }: { marcoLogico: MarcoLogicoData | null | undefined }) {
+   423→  if (!marcoLogico) {
+   424→    return (
+   425→      <Card>
+   426→        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+   427→          <span className="rounded-lg bg-muted p-2 w-9 h-9 grid place-items-center shrink-0" aria-hidden>
+   428→            <Network className="w-5 h-5 text-muted-foreground" />
+   429→          </span>
+   430→          <div className="min-w-0 flex-1">
+   431→            <p className="text-sm font-medium">Marco lógico aún no generado</p>
+   432→            <p className="text-sm text-muted-foreground">
+   433→              Muchos pliegos exigen marco lógico. Pídele al agente «Construye el marco lógico completo» en el chat de abajo y generará el árbol de problemas + la matriz por niveles.
+   434→            </p>
+   435→          </div>
+   436→        </CardContent>
+   437→      </Card>
+   438→    )
+   439→  }
+   440→  const ml = marcoLogico
+   441→  return (
+   442→    <Card>
+   443→      <CardHeader className="pb-3">
+   444→        <CardTitle className="text-base flex items-center gap-2">
+   445→          <Network className="w-5 h-5 text-teal-600" aria-hidden />
+   446→          Matriz de Marco Lógico
+   447→        </CardTitle>
+   448→        <p className="text-sm text-muted-foreground mt-1">
+   449→          Especialidad del agente: lógica de intervención Fin → Propósito → Componentes → Actividades, con indicadores verificables, medios y supuestos. Valídala contra el pliego antes de presentar.
+   450→        </p>
+   451→      </CardHeader>
+   452→      <CardContent className="space-y-4">
+   453→        {/* Árbol de problemas → objetivos */}
+   454→        <div className="grid md:grid-cols-2 gap-3">
+   455→          <div className="rounded-lg border border-rose-200 bg-rose-50/60 p-3">
+   456→            <p className="text-xs font-semibold uppercase tracking-wide text-rose-700 mb-1.5">Árbol de problemas</p>
+   457→            <p className="text-sm"><strong>Problema central:</strong> {ml.problemaCentral || 'n/d'}</p>
+   458→            {ml.causas.length > 0 && (
+   459→              <p className="text-sm mt-1.5"><strong>Causas:</strong></p>
+   460→            )}
+   461→            <ul className="list-disc list-inside text-sm text-muted-foreground">
+   462→              {ml.causas.map((c, i) => <li key={i}>{c}</li>)}
+   463→            </ul>
+   464→            {ml.efectos.length > 0 && (
+   465→              <p className="text-sm mt-1.5"><strong>Efectos:</strong></p>
+   466→            )}
+   467→            <ul className="list-disc list-inside text-sm text-muted-foreground">
+   468→              {ml.efectos.map((c, i) => <li key={i}>{c}</li>)}
+   469→            </ul>
+   470→          </div>
+   471→          <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+   472→            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 mb-1.5">Árbol de objetivos (espejo)</p>
+   473→            <p className="text-sm"><strong>Objetivo central:</strong> {ml.objetivoCentral || 'n/d'}</p>
+   474→            <p className="text-sm text-muted-foreground mt-1.5">
+   475→              Cada componente de la matriz responde a una causa; cada indicador verifica un objetivo.
+   476→            </p>
+   477→          </div>
+   478→        </div>
+   479→
+   480→        {/* Matriz */}
+   481→        <div className="overflow-x-auto">
+   482→          <table className="w-full text-sm border-collapse min-w-[640px]">
+   483→            <thead>
+   484→              <tr className="border-b text-left text-xs text-muted-foreground uppercase tracking-wide">
+   485→                <th scope="col" className="py-2 pr-3 font-medium w-32">Nivel</th>
+   486→                <th scope="col" className="py-2 pr-3 font-medium">Resumen narrativo</th>
+   487→                <th scope="col" className="py-2 pr-3 font-medium">Indicadores verificables</th>
+   488→                <th scope="col" className="py-2 pr-3 font-medium">Medios de verificación</th>
+   489→                <th scope="col" className="py-2 font-medium">Supuestos</th>
+   490→              </tr>
+   491→            </thead>
+   492→            <tbody>
+   493→              {ml.filas.map((f, i) => (
+   494→                <tr key={i} className="border-b last:border-0 align-top">
+   495→                  <td className="py-3 pr-3 font-medium whitespace-nowrap">{f.nivel}</td>
+   496→                  <td className="py-3 pr-3">{f.resumen || '—'}</td>
+   497→                  <td className="py-3 pr-3 text-muted-foreground">{f.indicadores || '—'}</td>
+   498→                  <td className="py-3 pr-3 text-muted-foreground">{f.mediosVerificacion || '—'}</td>
+   499→                  <td className="py-3 text-muted-foreground">{f.supuestos || '—'}</td>
+   500→                </tr>
+   501→              ))}
+   502→            </tbody>
+   503→          </table>
+   504→        </div>
+   505→      </CardContent>
+   506→    </Card>
+   507→  )
+   508→}
+   509→
+   510→function ProposalPanel({
+   511→  proposal,
+   512→  messages,
+   513→  generating,
+   514→  refining,
+   515→  onGenerate,
+   516→  onApprove,
+   517→  onReject,
+   518→  onRefine,
+   519→}: {
+   520→  proposal: ProposalData
+   521→  messages: ProposalMessageData[]
+   522→  generating: boolean
+   523→  refining: boolean
+   524→  onGenerate: () => void
+   525→  onApprove: () => void
+   526→  onReject: (notes: string) => void
+   527→  onRefine: (instruction: string) => void
+   528→}) {
+   529→  const { toast } = useToast()
+   530→  const [chatInput, setChatInput] = useState('')
+   531→  const chatEndRef = useRef<HTMLDivElement | null>(null)
+   532→
+   533→  // Auto-scroll del chat al crecer la conversación
+   534→  useEffect(() => {
+   535→    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+   536→  }, [messages.length, refining])
+   537→
+   538→  const sendInstruction = () => {
+   539→    const text = chatInput.trim()
+   540→    if (!text) {
+   541→      toast({ title: 'Escribe una instrucción para el agente', variant: 'destructive' })
+   542→      return
+   543→    }
+   544→    onRefine(text)
+   545→    setChatInput('')
+   546→  }
+   547→
+   548→  const quickIdeas = [
+   549→    'Construye el marco lógico completo con árbol de problemas y matriz por niveles',
+   550→    'Haz el cronograma más agresivo sin perder realismo',
+   551→    'Enfatiza la experiencia registrada más pertinente para el objeto',
+   552→    'Ajusta la metodología a una ejecución con entregables por quincena',
+   553→    'Refuerza el resumen ejecutivo con un gancho de valor más directo',
+   554→  ]
+   555→  return (
+   556→    <>
+   557→      <Card>
+   558→        <CardHeader className="pb-3">
+   559→          <div className="flex flex-wrap items-center justify-between gap-3">
+   560→            <div>
+   561→              <CardTitle className="text-lg flex items-center gap-2">
+   562→                <FileText className="w-5 h-5 text-lime-600" aria-hidden />
+   563→                Borrador de propuesta — versión {proposal.version}
+   564→              </CardTitle>
+   565→              <p className="text-sm text-muted-foreground mt-1">
+   566→                Generada {fmtDateTime(proposal.createdAt)}
+   567→                {proposal.status === 'APROBADA' && ` · Aprobada por ${proposal.approvedBy} el ${fmtDate(proposal.approvedAt)}`}
+   568→              </p>
+   569→            </div>
+   570→            <div className="flex flex-wrap gap-2">
+   571→              <Button size="sm" variant="outline" onClick={onGenerate} disabled={generating} className="min-h-9">
+   572→                <FilePlus2 className={`w-4 h-4 mr-1.5 ${generating ? 'animate-pulse' : ''}`} aria-hidden /> {generating ? 'Generando…' : 'Nueva versión'}
+   573→              </Button>
+   574→              <Button size="sm" variant="outline" asChild className="min-h-9">
+   575→                <a href={`/api/proposals/${proposal.id}/export`} download aria-label="Descargar propuesta en Word">
+   576→                  <Download className="w-4 h-4 mr-1.5" aria-hidden /> Word
+   577→                </a>
+   578→              </Button>
+   579→              {proposal.status === 'BORRADOR' && (
+   580→                <Button size="sm" onClick={onApprove} className="bg-emerald-600 hover:bg-emerald-700 min-h-9">
+   581→                  <UserCheck className="w-4 h-4 mr-1.5" aria-hidden /> Revisar y aprobar
+   582→                </Button>
+   583→              )}
+   584→            </div>
+   585→          </div>
+   586→        </CardHeader>
+   587→        <CardContent className="space-y-4">
+   588→          <UnconfirmedWarn count={proposal.unconfirmedCount} />
+   589→          {proposal.sections.map((s) => (
+   590→            <section key={s.key} className={`rounded-lg border p-4 ${s.unconfirmed ? 'border-amber-300 bg-amber-50/50' : ''}`}>
+   591→              <h4 className="font-semibold text-sm flex items-center gap-2">
+   592→                {s.title}
+   593→                {s.unconfirmed && <Badge variant="outline" className="border-amber-400 text-amber-800 text-[10px]">Contiene datos por confirmar</Badge>}
+   594→              </h4>
+   595→              <p className="text-sm mt-2 whitespace-pre-wrap leading-relaxed">{s.content}</p>
+   596→            </section>
+   597→          ))}
+   598→        </CardContent>
+   599→      </Card>
+   600→
+   601→      {/* Matriz de Marco Lógico (especialidad del agente) */}
+   602→      <MarcoLogicoCard marcoLogico={proposal.marcoLogico} />
+   603→
+   604→      {proposal.checklists.length > 0 && (
+   605→        <Card>
+   606→          <CardHeader className="pb-3">
+   607→            <CardTitle className="text-base">Checklist de presentación</CardTitle>
+   608→          </CardHeader>
+   609→          <CardContent className="grid md:grid-cols-2 gap-4">
+   610→            {proposal.checklists.map((g) => (
+   611→              <div key={g.group}>
+   612→                <h4 className="font-medium text-sm mb-2">{g.group}</h4>
+   613→                <ul className="space-y-1.5">
+   614→                  {g.items.map((it, i) => (
+   615→                    <li key={i} className="flex items-start gap-2 text-sm">
+   616→                      <span className={`mt-0.5 w-4 h-4 rounded border shrink-0 ${it.required ? 'border-emerald-600' : 'border-muted-foreground'}`} aria-hidden />
+   617→                      <span>
+   618→                        {it.label}
+   619→                        {it.required && <span className="text-rose-600 ml-1" title="Obligatorio">*</span>}
+   620→                      </span>
+   621→                    </li>
+   622→                  ))}
+   623→                </ul>
+   624→              </div>
+   625→            ))}
+   626→          </CardContent>
+   627→        </Card>
+   628→      )}
+   629→
+   630→      {/* Refinamiento conversacional con el agente (Módulo G+) */}
+   631→      {proposal.status === 'BORRADOR' && (
+   632→        <Card>
+   633→          <CardHeader className="pb-3">
+   634→            <CardTitle className="text-base flex items-center gap-2">
+   635→              <MessagesSquare className="w-5 h-5 text-emerald-600" aria-hidden />
+   636→              Refina el proyecto con el agente
+   637→            </CardTitle>
+   638→            <p className="text-sm text-muted-foreground mt-1">
+   639→              Habla con el agente en lenguaje natural: ajusta metodología, cronograma, enfoque o énfasis. Cada instrucción genera una nueva versión trazable, siempre sin inventar datos de la empresa.
+   640→            </p>
+   641→          </CardHeader>
+   642→          <CardContent className="space-y-3">
+   643→            <div className="max-h-72 overflow-y-auto space-y-2.5 rounded-lg border bg-muted/30 p-3" aria-live="polite">
+   644→              {messages.length === 0 && (
+   645→                <p className="text-sm text-muted-foreground text-center py-3">
+   646→                  Aún no hay conversación. Pídele al agente el primer ajuste del borrador.
+   647→                </p>
+   648→              )}
+   649→              {messages.map((m) => (
+   650→                <div key={m.id} className={`flex gap-2 ${m.role === 'USUARIO' ? 'justify-end' : 'justify-start'}`}>
+   651→                  {m.role === 'AGENTE' && (
+   652→                    <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-600 text-white grid place-items-center mt-0.5" aria-hidden>
+   653→                      <Bot className="w-3.5 h-3.5" />
+   654→                    </span>
+   655→                  )}
+   656→                  <div
+   657→                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
+   658→                      m.role === 'USUARIO' ? 'bg-emerald-600 text-white' : 'bg-background border'
+   659→                    }`}
+   660→                  >
+   661→                    {m.role === 'AGENTE' && m.versionAfter != null && (
+   662→                      <p className="text-[11px] opacity-80 mb-1 flex flex-wrap items-center gap-1">
+   663→                        v{m.versionBefore} → v{m.versionAfter}
+   664→                        {(() => {
+   665→                          try {
+   666→                            const keys = JSON.parse(m.sectionsAffected || '[]') as string[]
+   667→                            return keys.length > 0 ? ` · ${keys.join(', ')}` : ''
+   668→                          } catch {
+   669→                            return ''
+   670→                          }
+   671→                        })()}
+   672→                      </p>
+   673→                    )}
+   674→                    <p className="whitespace-pre-wrap">{m.content}</p>
+   675→                    <p className={`text-[10px] mt-1 ${m.role === 'USUARIO' ? 'text-emerald-100' : 'text-muted-foreground'}`}>
+   676→                      {fmtDateTime(m.createdAt)}
+   677→                    </p>
+   678→                  </div>
+   679→                  {m.role === 'USUARIO' && (
+   680→                    <span className="shrink-0 w-6 h-6 rounded-full bg-muted text-muted-foreground grid place-items-center mt-0.5" aria-hidden>
+   681→                      <User className="w-3.5 h-3.5" />
+   682→                    </span>
+   683→                  )}
+   684→                </div>
+   685→              ))}
+   686→              {refining && (
+   687→                <div className="flex gap-2 justify-start">
+   688→                  <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-600 text-white grid place-items-center mt-0.5 animate-pulse" aria-hidden>
+   689→                    <Bot className="w-3.5 h-3.5" />
+   690→                  </span>
+   691→                  <div className="bg-background border rounded-lg px-3 py-2 text-sm text-muted-foreground">
+   692→                    El agente está rediseñando el proyecto…
+   693→                  </div>
+   694→                </div>
+   695→              )}
+   696→              <div ref={chatEndRef} aria-hidden />
+   697→            </div>
+   698→
+   699→            {!refining && messages.length === 0 && (
+   700→              <div className="flex flex-wrap gap-2">
+   701→                {quickIdeas.map((idea) => (
+   702→                  <button
+   703→                    key={idea}
+   704→                    onClick={() => onRefine(idea)}
+   705→                    className="text-xs rounded-full border px-3 py-1.5 text-muted-foreground hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-600"
+   706→                  >
+   707→                    {idea}
+   708→                  </button>
+   709→                ))}
+   710→              </div>
+   711→            )}
+   712→
+   713→            <div className="flex gap-2">
+   714→              <Input
+   715→                value={chatInput}
+   716→                onChange={(e) => setChatInput(e.target.value)}
+   717→                onKeyDown={(e) => {
+   718→                  if (e.key === 'Enter' && !e.shiftKey) {
+   719→                    e.preventDefault()
+   720→                    sendInstruction()
+   721→                  }
+   722→                }}
+   723→                placeholder="Ej.: adapta la propuesta al sector salud y refuerza los indicadores de atención…"
+   724→                aria-label="Instrucción para el agente"
+   725→                disabled={refining}
+   726→                className="min-h-11"
+   727→              />
+   728→              <Button onClick={sendInstruction} disabled={refining} className="bg-emerald-600 hover:bg-emerald-700 min-h-11 shrink-0">
+   729→                <Send className="w-4 h-4 mr-1.5" aria-hidden /> {refining ? 'Refinando…' : 'Enviar'}
+   730→              </Button>
+   731→            </div>
+   732→          </CardContent>
+   733→        </Card>
+   734→      )}
+   735→
+   736→      {proposal.approvals && proposal.approvals.length > 0 && (
+   737→        <Card>
+   738→          <CardHeader className="pb-2">
+   739→            <CardTitle className="text-base">Trazabilidad de aprobación</CardTitle>
+   740→          </CardHeader>
+   741→          <CardContent>
+   742→            <ul className="space-y-2">
+   743→              {proposal.approvals.map((a) => (
+   744→                <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm rounded-md border px-3 py-2">
+   745→                  <Badge variant="outline" className={a.decision === 'APROBADA' ? 'border-emerald-300 text-emerald-800 bg-emerald-50' : 'border-rose-300 text-rose-700 bg-rose-50'}>
+   746→                    {a.decision === 'APROBADA' ? 'Aprobada' : 'Devuelta'}
+   747→                  </Badge>
+   748→                  <span><strong>{a.approver}</strong></span>
+   749→                  <span className="text-muted-foreground">{fmtDateTime(a.createdAt)}</span>
+   750→                  {a.notes && <span className="text-muted-foreground w-full">Notas: {a.notes}</span>}
+   751→                </li>
+   752→              ))}
+   753→            </ul>
+   754→          </CardContent>
+   755→        </Card>
+   756→      )}
+   757→    </>
+   758→  )
+   759→}
+   760→

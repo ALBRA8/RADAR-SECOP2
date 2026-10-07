@@ -1,0 +1,113 @@
+════════════════════════════════════════════════════════════════════
+RADAR-SECOP2 — VERIFICACIÓN FINAL DE TESTS (Task 3-a, TESTING)
+Fecha: 2026 (corrida final) · Proyecto: /home/z/my-project · Server :3000
+════════════════════════════════════════════════════════════════════
+
+RESUMEN EJECUTIVO
+─────────────────
+  SUITE                              RESULTADO
+  bun test tests/unit                98 pass / 0 fail  (284 expect(), 6 archivos, 594ms)
+  python3 scripts/e2e_test.py ALL    39/39 PASS        (fases A,B,C,D,E,F,G,J)
+  bash scripts/test_security.sh      PASS=12 FAIL=0
+  python3 scripts/test_sync.py       16 PASS / 0 FAIL / 0 SKIP
+  bunx tsc --noEmit                  0 errores (exit 0)
+  Dev server tras corridas           /api/health → ok:true, db:true, secop:true (no roto)
+
+1) UNIT TESTS — bun test tests/unit (runner: bun:test, sin vitest/jest)
+────────────────────────────────────────────────────────────────────────
+  tests/unit/evidence.test.ts  → regla de oro canBackCompliance: VERIFIED✓ OBSERVED✓
+                                 INFERRED✗ ESTIMATED✗ UNKNOWN✗; fail-closed con
+                                 null/undefined/minúsculas; normalizeTruthLevel con
+                                 fallback UNKNOWN; createEvidenceRow contra db/custom.db
+                                 con limpieza por source="UNIT_TEST_EVIDENCE" en afterAll.
+  tests/unit/memory.test.ts    → FACTUAL sin evidenceIds → MemoryValidationError; aislamiento
+                                 agentId foráneo (escritura rechazada, getById→null/404 honesto,
+                                 remove/list/recall nunca cruzan identidad); recall con score>0,
+                                 orden desc, accessCount refrescado; registros prefijo
+                                 "unit-test-" borrados en afterAll.
+  tests/unit/skills.test.ts    → los 11 JSON reales de skills_registry/ válidos; copias
+                                 mutadas (sin purpose, semver inválida, procedure vacío,
+                                 evidence_policy array, identity minúscula, confidence 1.5,
+                                 regression_tests/tools_required vacías) → inválidas.
+  tests/unit/security.test.ts  → rateLimit permite N y bloquea N+1 (+ ventana, claves aisladas);
+                                 timingSafeEqualStr iguales/distintos sin excepción por longitud;
+                                 sanitizeForPrompt bloquea "ignore previous instructions" (EN/ES)
+                                 y deja texto normal intacto; ssrfGuard: http→false,
+                                 https://datos.gov.co→true, 127.0.0.1/10.x/192.168.x/169.254.x/
+                                 172.16/100.64/0.0.0.0/[::1]→false.
+  tests/unit/filters.test.ts   → presupuesto fuera de rango → descartado con motivo explícito
+                                 (por debajo/superar máximo); sin precio no descarta (exige
+                                 validación humana); keywords con exigencia y conteo puro.
+  tests/unit/compat.test.ts    → motor de compatibilidad: 7 dimensiones, pesos suman 1,
+                                 resultados OK/PARCIAL/NO/ND explicables.
+
+  TOTAL: 98 pass, 0 fail.
+
+2) E2E — python3 scripts/e2e_test.py ALL (compatibilidad CLI A|B|C|D|--ONLYx intacta)
+────────────────────────────────────────────────────────────────────────
+  FASE A (humo canales)          A1-A4 .............. 4 PASS
+  FASE B (multimodal)            B1 PDF / B2 voz / B3 imagen ... 3 PASS
+  FASE C (Marco Lógico + export) C0-pre, C0, C1, C1b, C2, C3 ... 6 PASS
+     · FIX C0 aplicado: si no hay APROBADA_PREPARACION se crea vía API
+       (status → APROBADA_PREPARACION); propuesta BORRADOR se aprueba con
+       approver "QA-E2E" y, ante 422 (regla de oro §19), reintenta con
+       force:true + notes (flujo válido y auditado). Esta corrida usó una
+       oportunidad APROBADA_PREPARACION existente con BORRADOR.
+     · FIX D2 aplicado: tools/list ahora exige ">= 12" (17 en runtime).
+  FASE D (MCP JSON-RPC 2.0)      D1-D4 .............. 4 PASS
+  FASE E (Evidence/Truth, nueva) E1-E4 .............. 4 PASS
+     · analyze de oportunidad → evidences=8 (≥1); todo requisito con truthLevel;
+       CERO CUMPLE respaldados por INFERRED/ESTIMATED/UNKNOWN; provenanceJson no vacío.
+  FASE F (MemoryDV, nueva)       F1-F6 .............. 6 PASS
+     · /api/memory con stats (seed presente); FACTUAL sin evidencia → 400;
+       con evidenceIds → 201; GET ?q= → recall con score>0; agentId foráneo → 400;
+       limpieza DELETE 200.
+  FASE G (Skills/Doctor, nueva)  G1-G3 .............. 3 PASS
+     · /api/skills count=11 allValid=true; /api/health ok+db;
+       /api/doctor status=DEGRADED (≠UNHEALTHY), 10 checks, FAILs=[].
+  FASE J (FLUJO RADAR INTEGRAL §27, nueva) 9 PASS
+     · J1 SEARCH/INGEST: POST /api/secop/sync ok (fetched=300).
+     · J2 DEDUP: 2º sync → processesCreated=0 (idempotente).
+     · J3 DOCUMENT ANALYSIS: /api/media/analyze con audit_7c_mini_pliego.txt ok.
+     · J4 REQUIREMENTS+EVIDENCE: analyze → evidences=8, provenanceJson no vacío
+       (método IA_PROMPT_ANALYSIS).
+     · J6 COMPATIBILITY: score=39 > 0 con las 7 dimensiones.
+     · J7 APPROVAL: approve http=200 con snapshot {requirements, score,
+       unconfirmedCount} y executionId auditado.
+     · J8 OUTPUT: export .docx 12.440 bytes (>10KB) + MCP tools/call
+       get_opportunity (estado=APROBADA_PREPARACION, 8 requisitos).
+
+  TOTAL: 39/39 pruebas OK.
+
+3) SEGURIDAD Y SYNC (regresión)
+────────────────────────────────────────────────────────────────────────
+  scripts/test_security.sh  → PASS=12 FAIL=0: magic bytes (.bin disfrazado de
+  PDF/audio/video → 400), SVG denylist, served como attachment+nosniff+CSP,
+  404 sin fuga de rutas, X-MCP-Auth: disabled en dev, batch MCP >10 → -32600,
+  rate limit MCP 429, conformidad GET 405/DELETE 204.
+
+  scripts/test_sync.py      → 16 PASS: dedup intra-batch + diff con impactos +
+  hash extendido (bun), sync real days=3 con campos aditivos (changes, byImpact,
+  skippedErrors, pages, truncated), idempotencia (created=0), historial /changes,
+  404/500 para oportunidad inexistente.
+
+4) VERIFICACIÓN GLOBAL
+────────────────────────────────────────────────────────────────────────
+  bunx tsc --noEmit → 0 errores (la carpeta tests/ permanece excluida del tsconfig).
+  Dev server no interrumpido: GET /api/health 200, ok:true db:true secop:true.
+
+5) PROBLEMAS PENDIENTES / NOTAS
+────────────────────────────────────────────────────────────────────────
+  · Ningún test fue forzado a pasar editando src/: cero modificaciones en src/ por
+    Task 3-a (ownership respetado).
+  · /api/doctor reporta DEGRADED (no UNHEALTHY): estado esperado en sandbox; los
+    10 checks no muestran ningún FAIL. No bloquea la misión.
+  · Datos usados por E/J fueron reales del pipeline (sync SECOP + analyze IA,
+    engine=IA con evidencias IA_PROMPT_ANALYSIS); no fue necesario sembrar datos
+    de contingencia: la red y el AI SDK respondieron en todas las fases.
+  · Limpieza garantizada: unit tests borran sus filas (prefijo "unit-test-",
+    source="UNIT_TEST_EVIDENCE", agentId UNIT-TEST-FOREIGN); F6 borra la memoria
+    de prueba vía API.
+
+  CONCLUSIÓN: 98 unit + 39 E2E + 12 security + 16 sync = 165 verificaciones,
+  165 OK / 0 FAIL. Sistema RADAR-SECOP2 verificado de punta a punta.

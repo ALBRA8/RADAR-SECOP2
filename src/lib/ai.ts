@@ -22,6 +22,13 @@ import type {
   RequirementStatus,
 } from './types'
 import { parseJsonArray } from './types'
+import {
+  canBackCompliance,
+  clampConfidence,
+  normalizeCategory,
+  normalizeObligatoriness,
+  normalizeTruthLevel,
+} from './evidence'
 
 /** Parsea el JSON serializado del Marco Lógico de forma tolerante (corrupto → null). */
 export function safeParseMarcoLogico(raw: string | null | undefined): MarcoLogico | null {
@@ -142,12 +149,16 @@ Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura:
 {
   "summary": "resumen del objeto, alcance y condiciones en 2-4 frases",
   "requirements": [
-    { "code": "R1", "description": "requisito habilitante o técnico identificado", "status": "CUMPLE|NO_CUMPLE|PENDIENTE|REQUIERE_REVISION", "evidence": "qué evidencia registrada lo soporta (o 'ninguna registrada')", "action": "acción concreta para resolverlo" }
+    { "code": "R1", "description": "requisito habilitante o técnico identificado", "status": "CUMPLE|NO_CUMPLE|PENDIENTE|REQUIERE_REVISION", "evidence": "qué evidencia registrada lo soporta (o 'ninguna registrada')", "action": "acción concreta para resolverlo", "categoria": "HABILITANTE|TECNICO|ECONOMICO|JURIDICO|ADMINISTRATIVO", "obligatoriedad": "OBLIGATORIO|OPCIONAL|DESEABLE|AMBIGUO|DESCONOCIDO", "fechaLimite": "fecha límite ISO que el pliego menciona o null", "confidence": 0.0, "truthLevel": "OBSERVED|INFERRED|ESTIMATED|UNKNOWN" }
   ],
   "missingDocs": ["documento faltante 1", "..."],
   "risks": ["riesgo 1", "..."],
   "nextAction": "siguiente acción recomendada en una frase"
 }
+REGLAS DE EVIDENCIA (regla de oro — NO NEGOCIABLES):
+5. NUNCA puedes declarar truthLevel "VERIFIED": ese nivel está reservado a verificación humana o fuente primaria corroborada. Tu máximo es "OBSERVED", y SOLO si cites evidencia textual del pliego o de los datos publicados del proceso (p. ej. el precio base publicado). Si infieres o deduces, usa "INFERRED". Si no sabes, usa "UNKNOWN" — prefiero "NO SÉ" a "CREO QUE SÍ".
+6. Un requisito NO puede quedar "CUMPLE" salvo que su evidence cite un dato real y registrado. Un CUMPLE sin evidencia verificable será degradado automáticamente a PENDIENTE.
+7. confidence es tu certeza 0..1 sobre la clasificación del requisito (no sobre el cumplimiento).
 Incluye entre 5 y 10 requisitos: habilitantes (jurídicos, financieros, experiencia), técnicos y documentales típicos del tipo de proceso.`
 
       const user = `PROCESO SECOP II:
@@ -179,14 +190,27 @@ Analiza el proceso y produce el JSON.`
       const parsed = extractJson(content)
       if (parsed && Array.isArray(parsed.requirements) && parsed.requirements.length > 0) {
         const requirements: RequirementItem[] = (parsed.requirements as Record<string, unknown>[])
-          .map((r, i) => ({
-            code: String(r.code || `R${i + 1}`),
-            description: String(r.description || '').slice(0, 500),
-            status: VALID_STATUS.includes(r.status as RequirementStatus) ? (r.status as RequirementStatus) : 'PENDIENTE',
-            evidence: r.evidence ? String(r.evidence).slice(0, 400) : undefined,
-            action: r.action ? String(r.action).slice(0, 400) : undefined,
-            source: 'IA' as const,
-          }))
+          .map((r, i) => {
+            // Normalización de los nuevos campos (Task 2-a).
+            const rawTruth = normalizeTruthLevel(r.truthLevel)
+            // El motor IA NUNCA puede declarar VERIFIED: máximo OBSERVED.
+            const truth = rawTruth === 'VERIFIED' ? 'OBSERVED' : rawTruth
+            const due = typeof r.fechaLimite === 'string' && !Number.isNaN(Date.parse(r.fechaLimite)) ? new Date(r.fechaLimite).toISOString() : null
+            return {
+              code: String(r.code || `R${i + 1}`),
+              description: String(r.description || '').slice(0, 500),
+              status: VALID_STATUS.includes(r.status as RequirementStatus) ? (r.status as RequirementStatus) : 'PENDIENTE',
+              evidence: r.evidence ? String(r.evidence).slice(0, 400) : undefined,
+              action: r.action ? String(r.action).slice(0, 400) : undefined,
+              source: 'IA' as const,
+              category: normalizeCategory(r.categoria) ?? undefined,
+              obligatoriness: normalizeObligatoriness(r.obligatoriedad),
+              dueDate: due,
+              truthLevel: truth,
+              confidence: clampConfidence(r.confidence),
+            }
+          })
+          .map(enforceGoldenRule)
         return {
           summary: String(parsed.summary || 'Análisis generado por IA.').slice(0, 1200),
           requirements,
@@ -205,10 +229,32 @@ Analiza el proceso y produce el JSON.`
   return ruleBasedAnalysis(rec, bundle)
 }
 
+/**
+ * REGLA DE ORO RADAR (Task 2-a): INFERRED+CUMPLE es INVÁLIDO como conclusión definitiva.
+ * Si status==="CUMPLE" y no hay evidencia real (vacía, "ninguna", "no registrada") o el
+ * truthLevel no es VERIFIED/OBSERVED → se degrada a PENDIENTE con truthLevel INFERRED.
+ */
+const EMPTY_EVIDENCE_RE = /(^\s*(ninguna|ningún|no registrad|no disponible|sin evidencia|vac[íi]a|n\/a|-)\s*$)|(ninguna registrada)|(no registrad)/i
+
+export function enforceGoldenRule(r: RequirementItem): RequirementItem {
+  if (r.status !== 'CUMPLE') return r
+  const ev = (r.evidence || '').trim()
+  const evidenceInvalida = !ev || EMPTY_EVIDENCE_RE.test(ev)
+  if (evidenceInvalida || !canBackCompliance(r.truthLevel)) {
+    return {
+      ...r,
+      status: 'PENDIENTE',
+      truthLevel: 'INFERRED',
+      action: `CUMPLE degradado a PENDIENTE: sin evidencia verificable (regla de oro RADAR)${r.action ? ` | ${r.action}` : ''}`.slice(0, 400),
+    }
+  }
+  return r
+}
+
 /** Motor de respaldo basado en reglas — nunca inventa, marca todo como pendiente de validación. */
 export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): AnalysisResult {
   const c = bundle.company
-  const requirements: RequirementItem[] = [
+  const requirements: RequirementItem[] = ([
     {
       code: 'R1',
       description: 'Valor del proceso dentro del rango económico que la empresa puede atender',
@@ -216,6 +262,11 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
       evidence: rec.basePrice ? `Precio base publicado: $${rec.basePrice} COP` : 'Precio no publicado en SECOP',
       action: rec.basePrice == null ? 'Consultar el valor estimado en el pliego del proceso' : 'Confirmar capacidad de pago y flujo',
       source: 'REGLA',
+      category: 'ECONOMICO',
+      obligatoriness: 'OBLIGATORIO',
+      // Dato real derivado de un campo de la API de SECOP → OBSERVED (regla 2-a).
+      truthLevel: rec.basePrice == null ? 'UNKNOWN' : 'OBSERVED',
+      confidence: rec.basePrice == null ? 0.3 : 0.95,
     },
     {
       code: 'R2',
@@ -224,6 +275,11 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
       evidence: bundle.experiences.length > 0 ? `${bundle.experiences.length} contrato(s) registrado(s) — verificar pertinencia` : 'Ninguna experiencia registrada',
       action: 'Comparar el objeto del proceso contra la experiencia registrada de la empresa',
       source: 'REGLA',
+      category: 'HABILITANTE',
+      obligatoriness: 'AMBIGUO',
+      // La pertinencia de la experiencia es una inferencia, no un dato de la API.
+      truthLevel: 'INFERRED',
+      confidence: 0.5,
     },
     {
       code: 'R3',
@@ -232,6 +288,10 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
       evidence: 'Depende de los documentos registrados en el expediente',
       action: 'Verificar vigencia de RUT/RUP y completar lo que falte',
       source: 'REGLA',
+      category: 'JURIDICO',
+      obligatoriness: 'OBLIGATORIO',
+      truthLevel: 'UNKNOWN',
+      confidence: 0.4,
     },
     {
       code: 'R4',
@@ -240,6 +300,10 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
       evidence: 'No determinable desde los datos publicados',
       action: 'Revisar el pliego y confirmar con la compañía de garantías',
       source: 'REGLA',
+      category: 'ADMINISTRATIVO',
+      obligatoriness: 'DESCONOCIDO',
+      truthLevel: 'UNKNOWN',
+      confidence: 0.3,
     },
     {
       code: 'R5',
@@ -248,6 +312,10 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
       evidence: 'Información financiera de la empresa no registrada',
       action: 'Cargar estados financieros o índices si el pliego los exige',
       source: 'REGLA',
+      category: 'ECONOMICO',
+      obligatoriness: 'DESCONOCIDO',
+      truthLevel: 'UNKNOWN',
+      confidence: 0.3,
     },
     {
       code: 'R6',
@@ -256,8 +324,13 @@ export function ruleBasedAnalysis(rec: RawSecopRecord, bundle: CompanyBundle): A
       evidence: rec.duration ? `Duración publicada: ${rec.duration} ${rec.durationUnit || ''}` : 'Duración no publicada',
       action: 'Confirmar con operaciones que el plazo es cumplible',
       source: 'REGLA',
+      category: 'TECNICO',
+      obligatoriness: 'DESCONOCIDO',
+      // Dato real derivado de un campo de la API de SECOP → OBSERVED (regla 2-a).
+      truthLevel: rec.duration ? 'OBSERVED' : 'UNKNOWN',
+      confidence: rec.duration ? 0.9 : 0.3,
     },
-  ]
+  ] as RequirementItem[]).map(enforceGoldenRule)
   const missingDocs = bundle.documents.filter((d) => d.status !== 'DISPONIBLE').map((d) => d.name)
   return {
     summary: `Análisis basado en reglas (motor IA no disponible): proceso ${rec.id} de ${rec.entity}, objeto "${rec.objectName.slice(0, 140)}". Los requisitos quedaron marcados para validación humana.`,

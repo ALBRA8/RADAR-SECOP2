@@ -1,0 +1,73 @@
+{
+  "identity": "PREPARE_PROPOSAL",
+  "version": "1.0.0",
+  "purpose": "Ejecutar el Modo Agente Proyectista: generar y refinar iterativamente el borrador de propuesta técnica para una oportunidad, versionando cada cambio, manteniendo marcadores POR CONFIRMAR en datos no confirmados y dejando rastro conversacional en ProposalMessage.",
+  "trigger": "Se activa cuando el usuario aprueba una oportunidad para preparación (status APROBADA_PREPARACION), pide 'generar propuesta' o envía instrucciones de refinamiento en el chat del proyectista.",
+  "prerequisites": [
+    "Opportunity en status APROBADA_PREPARACION (o decisión explícita del usuario) con análisis vigente (ANALYZE_TENDER ejecutado).",
+    "Perfil de empresa disponible para poblar secciones con datos reales.",
+    "Requisitos verificados (VERIFY_REQUIREMENT) para saber qué se puede afirmar y qué queda POR CONFIRMAR."
+  ],
+  "procedure": [
+    "Paso 1: Cargar oportunidad + matriz de requisitos + perfil; calcular unconfirmedCount (datos críticos sin confirmar).",
+    "Paso 2: Ejecutar POST /api/proposals/generate (o MCP generate_proposal): la IA redacta secciones (objeto, enfoque metodológico, experiencia, equipo, cronograma) usando SOLO datos del perfil; todo dato no confirmado se escribe como POR CONFIRMAR.",
+    "Paso 3: Persistir Proposal v1 con status BORRADOR, sectionsJson y checklistsJson (checklist de presentación con documentos requeridos por el pliego).",
+    "Paso 4: En refinamiento, registrar cada instrucción del usuario como ProposalMessage role=USUARIO y ejecutar POST /api/proposals/[id]/refine (o MCP refine_proposal): el agente edita solo las secciones afectadas.",
+    "Paso 5: Incrementar version en cada refinamiento exitoso, guardar versionBefore/versionAfter y sectionsAffected en ProposalMessage; conservar el Marco Lógico vigente si el refinamiento no lo toca.",
+    "Paso 6: Entregar el borrador con su checklist, version, unconfirmedCount y la invitación explícita a revisión humana (REVIEW_OPPORTUNITY/aprobación) antes de cualquier uso externo."
+  ],
+  "tools_required": [
+    "POST /api/proposals/generate",
+    "POST /api/proposals/[id]/refine",
+    "MCP: generate_proposal, refine_proposal, get_opportunity, get_company_profile",
+    "Tablas: Proposal, ProposalMessage, Requirement",
+    "Skill: BUILD_MARCO_LOGICO (sección opcional del borrador)"
+  ],
+  "expected_result": "Proposal BORRADOR versionada (v1 + refinamientos) con secciones redactadas solo con datos del perfil, POR CONFIRMAR en lo no confirmado, checklist de presentación, hilo ProposalMessage completo y sin envío externo automático: la aprobación es siempre humana.",
+  "verification": {
+    "metodo": "Revisión del artefacto y del historial.",
+    "pasos": [
+      "GET /api/proposals/[id] muestra version correcta y sectionsJson no vacío.",
+      "Cada ProposalMessage tiene versionBefore/versionAfter coherentes y sectionsAffected real.",
+      "unconfirmedCount refleja los marcadores POR CONFIRMAR presentes en el texto.",
+      "Ninguna sección afirma experiencia/certificaciones ausentes del perfil (spot-check anti-invención)."
+    ]
+  },
+  "pitfalls": [
+    "Inventar cifras, nombres de personal clave o experiencia del consultor que no están en el perfil.",
+    "Refinar creando una Proposal nueva en lugar de versionar la existente.",
+    "Perder el Marco Lógico existente cuando el LLM omite ese campo en el refinamiento.",
+    "Omitir POR CONFIRMAR en datos críticos (precio del consultor, fechas) y presentar el borrador como cerrado.",
+    "Enviar o exportar la propuesta sin aprobación humana previa (violación de autonomía L2)."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "ProposalMessage (historial) + Evidence para datos incorporados + AuditEvent",
+    "truthLevels": {
+      "datos_del_perfil_empresa": "VERIFIED",
+      "requisitos_del_pliego": "OBSERVED",
+      "redaccion_de_la_IA": "INFERRED",
+      "datos_por_confirmar": "UNKNOWN"
+    },
+    "regla": "Todo dato factual del borrador debe ser rastreable al perfil (VERIFIED) o al pliego (OBSERVED); la prosa de la IA es INFERRED y no introduce hechos nuevos; lo no confirmado viaja como UNKNOWN/POR CONFIRMAR y alimenta unconfirmedCount para la aprobación con snapshot.",
+    "campos_obligatorios_provenance": ["sectionsAffected", "versionBefore/versionAfter", "evidence de datos incorporados"]
+  },
+  "regression_tests": [
+    {
+      "input": { "action": "POST /api/proposals/generate", "opportunity_aprobada": true },
+      "expected": { "status": 200, "proposal": { "version": 1, "status": "BORRADOR", "sections_no_vacias": true } }
+    },
+    {
+      "input": { "action": "POST /api/proposals/[id]/refine", "instruccion": "cambia el enfoque metodológico a Agile" },
+      "expected": { "version": "incrementa", "sectionsAffected": ["incluye enfoque metodológico"], "marcoLogico_conservado": true }
+    },
+    {
+      "input": { "escenario": "perfil sin experiencia del consultor" },
+      "expected": { "seccion_experiencia": "POR CONFIRMAR", "sin_datos_inventados": true, "unconfirmedCount": ">=1" }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

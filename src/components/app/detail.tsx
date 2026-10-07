@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { StatusBadge, ScoreBadge, DimIcon, ReqStatusBadge, UnconfirmedWarn, Spinner } from './shared'
+import { EvidenceSection } from './evidence'
 import {
   fmtCOP, fmtDate, fmtDateTime, daysUntil,
   DIM_COLORS,
@@ -179,6 +180,7 @@ export function OpportunityDetailView({
         <TabsList className="w-full sm:w-auto flex-wrap h-auto">
           <TabsTrigger value="compatibilidad">Compatibilidad explicada</TabsTrigger>
           <TabsTrigger value="matriz">Matriz de requisitos</TabsTrigger>
+          <TabsTrigger value="evidencia">Evidencia</TabsTrigger>
           <TabsTrigger value="riesgos">Riesgos y faltantes</TabsTrigger>
           <TabsTrigger value="propuesta">Propuesta {latestProposal ? `· v${latestProposal.version}` : ''}</TabsTrigger>
         </TabsList>
@@ -263,7 +265,11 @@ export function OpportunityDetailView({
           </Card>
         </TabsContent>
 
-        {/* Riesgos */}
+        {/* Evidencia e historial de cambios */}
+        <TabsContent value="evidencia" className="mt-4">
+          <EvidenceSection opportunityId={o.id} requirements={o.requirements || []} />
+        </TabsContent>
+
         <TabsContent value="riesgos" className="mt-4 grid md:grid-cols-2 gap-4">
           <Card>
             <CardHeader className="pb-2">

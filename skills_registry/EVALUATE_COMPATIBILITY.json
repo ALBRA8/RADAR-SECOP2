@@ -1,0 +1,71 @@
+{
+  "identity": "EVALUATE_COMPATIBILITY",
+  "version": "1.0.0",
+  "purpose": "Calcular la compatibilidad empresa↔proceso de forma explicable usando las 7 dimensiones determinísticas del motor (objeto, valor, ubicación, modalidad, tipo de contrato, vigencia, preparación documental), cada una con resultado OK|PARCIAL|NO|ND, score ponderado y razón legible.",
+  "trigger": "Se activa durante el sync para score inicial (runSync/recomputeRanking), cuando el usuario pide 'explicar por qué esta oportunidad tiene este score', o cuando el perfil de la empresa cambia y hay que re-evaluar.",
+  "prerequisites": [
+    "Registro crudo del proceso (RawSecopRecord) disponible: evaluateCompatibility opera sobre datos SECOP, no sobre resúmenes.",
+    "Perfil de empresa cargado con sus parámetros configurables (minBudget, maxBudget, departamentosAllowed, modalidadesAllowed, contractTypesAllowed, phasesAllowed, requireKeywordHit).",
+    "No mezclar con el score de la IA: este es el motor determinístico y reproducible."
+  ],
+  "procedure": [
+    "Paso 1: Cargar CompatInput (perfil + parámetros de la Company) y el RawSecopRecord del proceso.",
+    "Paso 2: Evaluar dimensión objeto: relación objeto↔productos/servicios por frases y tokens (phraseScore vs tokenScore*0.7, se toma el máximo).",
+    "Paso 3: Evaluar valor: basePrice dentro de [minBudget, maxBudget] (con tolerancias: por debajo/encima → score parcial 0.3/0.4, sin precio → ND).",
+    "Paso 4: Evaluar ubicación (departamento del proceso vs cobertura; '[]' = nacional), modalidad (vs modalidadesAllowed; '[]' = todas), tipo de contrato y vigencia (fase/estado vs phasesAllowed, proceso cerrado → NO).",
+    "Paso 5: Evaluar preparación documental de la empresa (documentos DISPONIBLE/PENDIENTE/VENCIDO → OK|PARCIAL|NO).",
+    "Paso 6: Componer el resultado: {score ponderado, dimensions[7] con key/label/result/score/weight/reason, summary}; persistir reasonsJson y score en la Opportunity; jamás emitir un score sin sus 7 razones."
+  ],
+  "tools_required": [
+    "Motor: evaluateCompatibility + DEFAULT_WEIGHTS (src/lib/compat.ts)",
+    "Orquestador: runSync / recomputeRanking (src/lib/sync.ts)",
+    "MCP: get_company_profile",
+    "Tablas: Company, Opportunity (reasonsJson, score)"
+  ],
+  "expected_result": "Evaluación con exactamente 7 dimensiones, cada una con result ∈ {OK, PARCIAL, NO, ND}, score 0..1, weight y reason en español; score total ponderado persistido en Opportunity.score y las razones en Opportunity.reasonsJson; reproducible: mismos inputs → mismo output.",
+  "verification": {
+    "metodo": "Re-ejecución determinística y chequeo estructural.",
+    "pasos": [
+      "Re-evaluar el mismo proceso dos veces: resultados idénticos (determinismo).",
+      "dimensions.length === 7 y keys = {objeto, valor, ubicacion, modalidad, tipoContrato, vigencia, preparacion}.",
+      "Score total = suma(score_dim * weight_dim) dentro de [0,1].",
+      "Cada reason explica el resultado en español legible (no vacío, no genérico)."
+    ]
+  },
+  "pitfalls": [
+    "Usar el texto resumido por IA en lugar del RawSecopRecord (pérdida de determinismo).",
+    "Mezclar este score con el juicio del LLM sin etiquetar cuál es cuál.",
+    "Tratar ND como NO: 'sin dato' no es 'no cumple'; distorsiona el ranking.",
+    "Olvidar re-evaluar cuando cambia el perfil de la empresa (scores obsoletos).",
+    "Emitir score sin reasonsJson: la explicabilidad es la mitad del contrato."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": false,
+    "guardar_en": "Opportunity.reasonsJson + Opportunity.score + AuditEvent",
+    "truthLevels": {
+      "evaluacion_deterministica": "VERIFIED",
+      "datos_de_entrada_SECOP": "OBSERVED",
+      "datos_de_entrada_perfil": "VERIFIED"
+    },
+    "regla": "El motor determinístico no genera Evidence por dimensión: su evidencia ES el reasonsJson persistido (reproducible). Los datos de entrada conservan su truthLevel original; una dimensión ND debe poder explicarse por ausencia de dato, no silenciarse.",
+    "campos_obligatorios_provenance": ["reason por dimensión", "weight", "result", "score"]
+  },
+  "regression_tests": [
+    {
+      "input": { "proceso": { "basePrice": 10000000, "department": "Cundinamarca", "fase": "Presentación de oferta" }, "empresa": { "minBudget": 5000000, "maxBudget": 20000000, "departmentsAllowed": "[]" } },
+      "expected": { "valor": "OK", "ubicacion": "OK (nacional)", "dimensions_count": 7 }
+    },
+    {
+      "input": { "proceso": { "basePrice": null }, "empresa": { "minBudget": 5000000, "maxBudget": 20000000 } },
+      "expected": { "valor": "ND", "score_valor": 0, "razon_menciona_sin_precio": true }
+    },
+    {
+      "input": { "proceso": { "estado": "Cerrado/Adjudicado" }, "empresa": {} },
+      "expected": { "vigencia": "NO", "proceso_finalizado_detectado": true }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

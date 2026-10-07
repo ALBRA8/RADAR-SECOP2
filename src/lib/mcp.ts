@@ -593,6 +593,158 @@ export const MCP_TOOLS: Record<string, ToolDef> = {
       }
     },
   },
+
+  // ─── Observability / Doctor / Skills / Memory (PROMPT 05 §25) ─
+
+  get_audit_events: {
+    description:
+      'Eventos de auditoría recientes del agente (acciones, entidad afectada, detalle, latencia y estado). Útil para reconstruir qué hizo el agente y cuándo.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', maximum: 100, default: 20, description: 'Máximo de eventos (1-100)' },
+      },
+    },
+    handler: async (args) => {
+      const limit = Math.min(Math.max(num(args.limit) ?? 20, 1), 100)
+      const events = await db.auditEvent.findMany({ orderBy: { createdAt: 'desc' }, take: limit })
+      return {
+        total: events.length,
+        eventos: events.map((e) => ({
+          id: e.id,
+          accion: e.action,
+          entidad: e.entityType,
+          entidadId: e.entityId,
+          detalle: e.detail,
+          executionId: e.executionId,
+          correlationId: e.correlationId,
+          agentId: e.agentId,
+          latenciaMs: e.latencyMs,
+          estado: e.status,
+          fecha: e.createdAt,
+        })),
+      }
+    },
+  },
+
+  get_executions: {
+    description:
+      'Ejecuciones recientes del agente (observability §25): operación, nivel de autonomía, latencia, estado (SUCCESS/PARTIAL/FAILED) y errores. Filtrable por operación.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', description: 'Filtrar por operación, p. ej. GENERATE_PROPOSAL, DOCTOR_RUN (opcional)' },
+        limit: { type: 'number', maximum: 100, default: 20, description: 'Máximo de ejecuciones (1-100)' },
+      },
+    },
+    handler: async (args) => {
+      const limit = Math.min(Math.max(num(args.limit) ?? 20, 1), 100)
+      const operation = str(args.operation) || undefined
+      const executions = await db.execution.findMany({
+        where: operation ? { operation } : undefined,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+      return {
+        total: executions.length,
+        ejecuciones: executions.map((e) => ({
+          id: e.id,
+          operacion: e.operation,
+          correlationId: e.correlationId,
+          skill: e.skillIdentity,
+          autonomia: e.autonomyLevel,
+          estado: e.status,
+          latenciaMs: e.latencyMs,
+          errores: e.errorsJson ? parseJsonArray<unknown>(e.errorsJson) : undefined,
+          fecha: e.createdAt,
+        })),
+      }
+    },
+  },
+
+  memory_search: {
+    description:
+      'Busca en la memoria del agente (MemoryDV §13-14): recuerdos episódicos, semánticos, factuales y procedurales con su nivel de verdad. Requiere el módulo de memoria (Agente 2-b).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', description: 'Texto a buscar en clave/contenido/resumen de la memoria' },
+        type: { type: 'string', enum: ['EPISODIC', 'SEMANTIC', 'FACTUAL', 'PROCEDURAL'], description: 'Filtrar por tipo de memoria (opcional)' },
+        limit: { type: 'number', maximum: 50, default: 10, description: 'Máximo de recuerdos (1-50)' },
+      },
+      required: ['q'],
+    },
+    handler: async (args) => {
+      const q = str(args.q).trim()
+      if (!q) throw new Error('Parámetro requerido: q (texto a buscar)')
+      const limit = Math.min(Math.max(num(args.limit) ?? 10, 1), 50)
+      const type = str(args.type)
+      // Módulo MemoryDV (Agente 2-b): import dinámico — compila aunque aún no exista.
+      try {
+        const mod = (await import('@/lib/memory')) as Record<string, unknown>
+        // API preferida: recall(q, { type, limit })
+        const recall = typeof mod.recall === 'function' ? (mod.recall as (q: string, opts?: unknown) => Promise<unknown>) : undefined
+        const fallback = ['searchMemory', 'memorySearch', 'search'].map((k) => mod[k]).find((f) => typeof f === 'function') as
+          | ((...a: unknown[]) => Promise<unknown>)
+          | undefined
+        if (!recall && !fallback) throw new Error('sin función de búsqueda exportada')
+        const results = recall ? await recall(q, { type: type || undefined, limit }) : await fallback!(q, type || undefined, limit)
+        return { query: q, resultados: results }
+      } catch (err) {
+        throw new Error(`MemoryDV no disponible: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+  },
+
+  list_skills: {
+    description:
+      'Lista los skill contracts activos del agente (§15): identidad, versión, propósito, disparador, tasa de éxito y origen (SEED/LEARNED).',
+    inputSchema: { type: 'object', properties: {} },
+    handler: async () => {
+      const skills = await db.skillContract.findMany({
+        where: { status: 'ACTIVE' },
+        orderBy: { identity: 'asc' },
+      })
+      return {
+        total: skills.length,
+        skills: skills.map((s) => ({
+          identity: s.identity,
+          version: s.version,
+          proposito: s.purpose,
+          disparador: s.trigger,
+          resultadoEsperado: s.expectedResult,
+          successRate: s.successRate,
+          runsCount: s.runsCount,
+          confianza: s.confidence,
+          origen: s.origin,
+          ultimaValidacion: s.lastValidatedAt,
+        })),
+      }
+    },
+  },
+
+  doctor_report: {
+    description:
+      'Diagnóstico de salud del agente (Doctor): conectividad SECOP, integridad de BD, canales, tools MCP, memoria, skills, evidencia sin provenance, requisitos sin fuente, deadlines vencidos y ejecuciones fallidas (24h).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fix: { type: 'boolean', default: false, description: 'Aplica auto-fixes seguros (re-seed skills, consolidación de memoria) si es true' },
+      },
+    },
+    handler: async (args) => {
+      const { runDoctor } = await import('@/lib/doctor')
+      const report = await runDoctor({ fix: args.fix === true })
+      return {
+        status: report.status,
+        checkedAt: report.checkedAt,
+        executionId: report.executionId,
+        resumen: Object.fromEntries(report.checks.map((c) => [c.id, c.status])),
+        checks: report.checks.map((c) => ({ id: c.id, status: c.status, detail: c.detail })),
+        fixes: report.fixes,
+      }
+    },
+  },
 }
 
 // ─── Dispatcher JSON-RPC ─────────────────────────────────────

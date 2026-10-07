@@ -1,0 +1,72 @@
+{
+  "identity": "BUILD_MARCO_LOGICO",
+  "version": "1.0.0",
+  "purpose": "Construir la Matriz de Marco Lógico de la propuesta: árbol de problemas y matriz Fin / Propósito / Componentes / Actividades con indicadores verificables, medios de verificación y supuestos por fila, persistida en Proposal.logicFrameworkJson y consultable vía MCP.",
+  "trigger": "Se activa cuando el usuario pide 'marco lógico', cuando generate_proposal la incluye, o cuando el pliego exige metodología lógica en la propuesta técnica.",
+  "prerequisites": [
+    "Proposal existente (la matriz vive dentro de logicFrameworkJson de la propuesta).",
+    "Objeto y alcance del proceso conocidos (SecopProcess + análisis) y perfil de la empresa.",
+    "Opcionalmente, requisitos técnicos extraídos para derivar componentes/actividades realistas."
+  ],
+  "procedure": [
+    "Paso 1: Derivar el árbol de problemas: problema central ligado al objeto del proceso, causas y efectos; mantener coherencia vertical problemas→objetivos.",
+    "Paso 2: Construir la matriz por filas: FIN (impacto de largo plazo), PROPÓSITO (efecto directo al entregar), COMPONENTES (entregables) y ACTIVIDADES (tareas por componente).",
+    "Paso 3: Por cada fila completar resumen narrativo, indicadores medibles (con unidad y meta), medios de verificación (documento/fuente que probará el indicador) y supuestos (condiciones externas).",
+    "Paso 4: Validar la lógica horizontal y vertical: cada componente contribuye al propósito, cada actividad produce su componente; indicadores sin medios de verificación se marcan como tal (no se inventan fuentes).",
+    "Paso 5: Persistir en Proposal.logicFrameworkJson mediante generate/refine (safeParseMarcoLogico en ai.ts tolera JSON corrupto y refine conserva la matriz vigente si la IA la omite).",
+    "Paso 6: Exponer vía MCP get_marco_logico y en el detalle de la propuesta (matriz renderizada); reportar si la matriz proviene de IA o de plantilla fallback."
+  ],
+  "tools_required": [
+    "MCP: get_marco_logico, refine_proposal, generate_proposal",
+    "Parser: safeParseMarcoLogico / extractJson (src/lib/ai.ts)",
+    "Tablas: Proposal (logicFrameworkJson)",
+    "Skill: PREPARE_PROPOSAL (contenedor del artefacto)"
+  ],
+  "expected_result": "Matriz completa y bien formada: 4 niveles (Fin/Propósito/Componentes/Actividades) con indicadores, medios de verificación y supuestos por fila; persistida en logicFrameworkJson; renderizable en UI y consultable por MCP sin errores de parseo.",
+  "verification": {
+    "metodo": "Chequeo estructural y de coherencia.",
+    "pasos": [
+      "safeParseMarcoLogico(logicFrameworkJson) devuelve matriz sin null (JSON bien formado).",
+      "Existen los 4 niveles y cada fila tiene indicador + medio de verificación + supuesto (o marcación explícita de ausencia).",
+      "Los medios de verificación nombran fuentes plausibles y existentes (no documentos fantasma).",
+      "GET MCP get_marco_logico devuelve la matriz almacenada sin alteraciones."
+    ]
+  },
+  "pitfalls": [
+    "Plantilla genérica despegada del objeto real del proceso (matriz que sirve para cualquier licitación = matriz de nada).",
+    "Indicadores no medibles ('mejorar la satisfacción' sin unidad ni meta).",
+    "Inventar medios de verificación que la empresa no puede producir.",
+    "Romper la coherencia vertical (actividades que no producen los componentes declarados).",
+    "Que el refinamiento borre la matriz vigente porque la IA omitió el campo (debe conservarse)."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "Proposal.logicFrameworkJson + Evidence para supuestos con fuente + AuditEvent",
+    "truthLevels": {
+      "objeto_y_alcance_del_proceso": "OBSERVED",
+      "estructura_de_la_matriz": "INFERRED",
+      "datos_del_perfil_usados_en_fila": "VERIFIED",
+      "supuestos_externos": "ESTIMATED"
+    },
+    "regla": "La matriz es una construcción inferida (INFERRED) sobre hechos observados; sus supuestos deben ser explícitos y clasificados como ESTIMATED; si una celda no tiene base real, se marca POR CONFIRMAR en vez de rellenarse con ficción.",
+    "campos_obligatorios_provenance": ["niveles", "indicadores", "medios_de_verificacion", "supuestos", "engine IA|REGLAS"]
+  },
+  "regression_tests": [
+    {
+      "input": { "action": "generate_proposal con marco lógico", "objeto": "Suministro de equipos de cómputo" },
+      "expected": { "niveles": ["FIN", "PROPOSITO", "COMPONENTES", "ACTIVIDADES"], "matriz_coherente_con_objeto": true }
+    },
+    {
+      "input": { "action": "refine_proposal sin mencionar marco lógico" },
+      "expected": { "logicFrameworkJson": "conservado sin cambios", "matriz_no_perdida": true }
+    },
+    {
+      "input": { "escenario": "logicFrameworkJson corrupto en BD" },
+      "expected": { "safeParseMarcoLogico": "retorna null sin crashear", "export_y_refine_no_fallan": true }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

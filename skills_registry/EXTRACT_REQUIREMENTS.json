@@ -1,0 +1,72 @@
+{
+  "identity": "EXTRACT_REQUIREMENTS",
+  "version": "1.0.0",
+  "purpose": "Extraer los requisitos del proceso (objeto, pliegos y anexos) como filas estructuradas en Requirement: código, descripción, categoría (HABILITANTE|TECNICO|ECONOMICO|JURIDICO|ADMINISTRATIVO), obligatoriedad (OBLIGATORIO|OPCIONAL|DESEABLE|AMBIGUO) y fecha límite, sin inventar requisitos ni resolver ambigüedades por su cuenta.",
+  "trigger": "Se activa como sub-paso de ANALYZE_TENDER, cuando el usuario pide 'extraer/listar requisitos', o cuando se cargan pliegos nuevos que obligan a re-extraer.",
+  "prerequisites": [
+    "Fuente disponible: SecopProcess (description/objectName) y/o análisis de pliego (ANALYZE_DOCUMENT con texto extraído).",
+    "Opportunity existente a la que attaching los Requirement.",
+    "El extractor no debe reutilizar requisitos de otra oportunidad (aislamiento por opportunityId)."
+  ],
+  "procedure": [
+    "Paso 1: Identificar las fuentes: description y objectName del SecopProcess, y el texto de pliegos/anexos analizados (si no existe, ejecutar antes ANALYZE_DOCUMENT).",
+    "Paso 2: Pedir al LLM (o reglas si falta IA) la lista de requisitos con el esquema exacto: {code, description, category, obligatoriness, dueDate?}; prohibido fusionar requisitos distintos en una sola fila.",
+    "Paso 3: Clasificar cada requisito: category ∈ {HABILITANTE, TECNICO, ECONOMICO, JURIDICO, ADMINISTRATIVO}; si el texto no permite clasificar con certeza, usar category=null y obligatoriness=AMBIGUO.",
+    "Paso 4: Determinar obligatoriedad por redacción ('deberá', 'obligatorio', 'condición suspensive' → OBLIGATORIO; 'deseable', 'puntualiza' → DESEABLE; ambiguo → AMBIGUO, nunca forzar a OBLIGATORIO).",
+    "Paso 5: Extraer dueDate solo si está explícito en el texto (fechas de cierre/recepción); no inferir plazos.",
+    "Paso 6: Persistir en Requirement (status inicial PENDIENTE, truthLevel según fuente: OBSERVED si viene del pliego, INFERRED si es lectura del LLM, source=IA|REGLA) y responder la lista completa con contador por categoría."
+  ],
+  "tools_required": [
+    "Skill: ANALYZE_DOCUMENT (texto de pliegos)",
+    "MCP: get_opportunity",
+    "MCP: analyze_pliego_text",
+    "Modelo: src/lib/ai.ts (extractJson para salida estructurada)",
+    "Tabla: Requirement (prisma)"
+  ],
+  "expected_result": "Lista de Requirement persistida y asociada a la Opportunity: cada fila con code, description, category (o null justificado), obligatoriedad correcta, dueDate solo si explícito, status inicial PENDIENTE y truthLevel acorde a la fuente; cero requisitos inventados.",
+  "verification": {
+    "metodo": "Auditoría de la lista contra las fuentes.",
+    "pasos": [
+      "Cada Requirement cita una fuente trazable (description del proceso o sección del pliego).",
+      "No existen filas duplicadas (mismo requisito textual debe deduplicarse).",
+      "Los AMBIGUO son realmente ambiguos: spot-check de 3 filas AMBIGUO contra el texto.",
+      "dueDate de cada fila coincide con una fecha literal del texto o es null."
+    ]
+  },
+  "pitfalls": [
+    "Inventar requisitos típicos de licitaciones que no están en el pliego (alucinación de plantilla).",
+    "Marcar todo como OBLIGATORIO por conservadurismo: distorsiona la verificación posterior.",
+    "Perder la distinción HABILITANTE vs TECNICO (las habilitantes bloquean la participación).",
+    "Fusionar en una fila requisitos independientes (ej. RUP + experiencia en un solo requisito).",
+    "Parsear fechas ambiguas ('dentro de 5 días hábiles') sin resolverlas ni marcarlas AMBIGUO."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "Evidence (relatedRequirementId) + Requirement.source",
+    "truthLevels": {
+      "texto_literal_del_pliego": "OBSERVED",
+      "requisito_parafraseado_por_IA": "INFERRED",
+      "requisito_desde_descripcion_SECOP": "OBSERVED"
+    },
+    "regla": "Cada requisito relevante debe tener Evidence asociada con el fragmento textual que lo origina (quote) y su ubicación (página/sección si está disponible); sin quote, truthLevel=INFERRED como máximo y obligatoriness=AMBIGUO si no es literal.",
+    "campos_obligatorios_provenance": ["source", "sourceType=DOCUMENT|API", "extractedFact (quote)", "truthLevel", "provenanceJson (página/extractor)"]
+  },
+  "regression_tests": [
+    {
+      "input": { "pliego": "texto con 5 requisitos claros y 1 ambiguo" },
+      "expected": { "requisitos_extraidos": 6, "ambiguos": 1, "todos_con_categoria_o_null": true }
+    },
+    {
+      "input": { "pliego": "sin fechas de cierre" },
+      "expected": { "dueDate": "null en todas las filas", "no_fechas_inferidas": true }
+    },
+    {
+      "input": { "escenario": "re-extracción sobre la misma oportunidad" },
+      "expected": { "sin_duplicados": true, "filas_reemplazadas_o_deduplicadas": true }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

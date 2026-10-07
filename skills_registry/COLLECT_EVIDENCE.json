@@ -1,0 +1,76 @@
+{
+  "identity": "COLLECT_EVIDENCE",
+  "version": "1.0.0",
+  "purpose": "Registrar toda afirmación importante como Evidence con provenance completa: de dónde salió, cuándo, qué documento lo respalda y si fue observado o inferido; adjuntando la evidencia a la oportunidad y/o requisito correspondiente.",
+  "trigger": "Se activa cada vez que un flujo (análisis, verificación, canal Telegram/WhatsApp, media) produce un dato que respalda una afirmación: lectura de pliego, dato de SECOP, transcripción de voz, análisis de imagen o aporte del usuario.",
+  "prerequisites": [
+    "Existen las tablas Evidence y AuditEvent.",
+    "Se conoce el origen real del dato (API, documento, canal o usuario); si no se conoce, el dato no se registra como evidencia.",
+    "Oportunity/Requirement destino identificables (relatedOpportunityId/relatedRequirementId) cuando aplica."
+  ],
+  "procedure": [
+    "Paso 1: Identificar el dato a preservar y su origen concreto: source ∈ {SECOP_API, PLIEGO_PDF, ANEXO, IMAGEN, AUDIO, VIDEO, CANAL_TELEGRAM, CANAL_WHATSAPP, PERFIL_EMPRESA, CONTRATO, IA_INFERENCIA, MANUAL}.",
+    "Paso 2: Clasificar sourceType (API|DOCUMENT|IMAGE|AUDIO|VIDEO|CHANNEL|USER|PROFILE|INFERRED) y completar los punteros: sourceUrl, sourceDocId, sourceMessageId, timestamp del hecho.",
+    "Paso 3: Redactar extractedFact como hecho autocontenido y verificable (no opiniones), con context opcional.",
+    "Paso 4: Asignar confidence 0..1 y truthLevel: VERIFIED (perfil/documento interno), OBSERVED (visto en fuente externa), INFERRED (conclusión del LLM), ESTIMATED (aproximación), UNKNOWN (sin respaldo). Nunca promocionar INFERRED sin corroboración.",
+    "Paso 5: Escribir provenanceJson con método de extracción, página/prompt/extractor y hash del documento si aplica; enlazar relatedRequirementId/relatedOpportunityId.",
+    "Paso 6: Persistir la fila Evidence y registrar en AuditEvent la acción de recolección (con executionId/correlationId si existe Execution activa)."
+  ],
+  "tools_required": [
+    "Tabla: Evidence (prisma)",
+    "Tabla: AuditEvent (prisma)",
+    "Tabla: MemoryEntry (para memorias FACTUAL que exigen evidenceIds)",
+    "Skill: ANALYZE_DOCUMENT (fuentes de documento)",
+    "Skill: ANALYZE_TENDER (consumidor principal)",
+    "Canales: ChannelMessage (sourceMessageId)"
+  ],
+  "expected_result": "Fila(s) Evidence creadas con provenance completa y enlazadas al requisito/oportunidad correctas; cualquier consumidor posterior puede reconstruir el porqué de cada afirmación consultando la evidencia.",
+  "verification": {
+    "metodo": "Reconstrucción de provenance.",
+    "pasos": [
+      "GET /api/opportunities/[id] (o query directa) lista las Evidence con relatedOpportunityId correcto.",
+      "Cada Evidence tiene source, sourceType, extractedFact y truthLevel no vacíos.",
+      "Evidence con sourceType=DOCUMENT tiene sourceDocId o quote en provenanceJson.",
+      "Ninguna Evidence FACTUAL-type usada por MemoryEntry carece de evidenceIds."
+    ]
+  },
+  "pitfalls": [
+    "Registrar la conclusión del LLM como OBSERVED (es INFERRED hasta corroborarse).",
+    "Dejar provenanceJson vacío: la evidencia pierde su trazabilidad y valor.",
+    "Duplicar la misma evidencia en cada re-análisis sin deduplicación por extractedFact+fuente.",
+    "Registrar evidencia sin enlazar a opportunity/requirement (huérfana, irrecuperable).",
+    "Confundir timestamp de registro con timestamp del hecho observado."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "Evidence (la evidencia es en sí esta skill) + AuditEvent",
+    "truthLevels": {
+      "perfil_empresa": "VERIFIED",
+      "SECOP_API": "OBSERVED",
+      "pliegos_y_anexos": "OBSERVED",
+      "canales_usuario": "OBSERVED",
+      "inferencias_LLM": "INFERRED",
+      "estimaciones": "ESTIMATED"
+    },
+    "regla": "La regla de oro del proyecto: una inferencia del LLM nunca se promociona automáticamente a hecho; toda Evidence de tipo FACTUAL que alimente memoria debe listar evidenceIds; verificationStatus solo pasa a CORROBORATED con una segunda fuente independiente.",
+    "campos_obligatorios_provenance": ["source", "sourceType", "extractedFact", "confidence", "truthLevel", "verificationStatus", "provenanceJson"]
+  },
+  "regression_tests": [
+    {
+      "input": { "hecho": "dato literal del pliego página 3", "source": "PLIEGO_PDF" },
+      "expected": { "truthLevel": "OBSERVED", "provenanceJson": "incluye página", "persistida": true }
+    },
+    {
+      "input": { "hecho": "conclusión del LLM sin segunda fuente", "source": "IA_INFERENCIA" },
+      "expected": { "truthLevel": "INFERRED", "verificationStatus": "UNVERIFIED", "nunca_VERIFIED": true }
+    },
+    {
+      "input": { "escenario": "misma evidencia recolectada dos veces en re-análisis" },
+      "expected": { "deduplicada_o_marcada": true, "sin_filas_identicas_repetidas": true }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

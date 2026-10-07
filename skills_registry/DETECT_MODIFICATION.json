@@ -1,0 +1,72 @@
+{
+  "identity": "DETECT_MODIFICATION",
+  "version": "1.0.0",
+  "purpose": "Detectar cambios en un proceso SECOP entre sincronizaciones comparando campo por campo old→new mediante el contentHash, registrar cada modificación en ProcessChange con impacto (ALTA|MEDIA|BAJA) y nota, y disparar la re-acción adecuada (notificación, re-análisis).",
+  "trigger": "Se activa automáticamente durante POST /api/secop/sync cuando el contentHash de un SecopProcess existente difiere del record fresco de Socrata, o cuando el usuario pregunta '¿qué cambió en este proceso?'.",
+  "prerequisites": [
+    "SecopProcess existente con contentHash previo y rawJson (el estado old).",
+    "Record fresco de la API Socrata (el estado new).",
+    "Campos monitoreables: receptionDate, basePrice, state, objectName, url, phase, description, fechas clave."
+  ],
+  "procedure": [
+    "Paso 1: Durante el sync, calcular el SHA-256 del contenido normalizado del record fresco y compararlo con SecopProcess.contentHash; si es igual → no hay nada que hacer.",
+    "Paso 2: Si difiere, diff campo por campo entre rawJson viejo y record nuevo; ignorar campos irrelevantes (metadatos de indexación) y normalizar formatos de fecha/moneda antes de comparar.",
+    "Paso 3: Por cada campo cambiado, crear ProcessChange {field, oldValue, newValue, impact, impactNote, source=SECOP_API}.",
+    "Paso 4: Clasificar impacto: ALTA si cambia receptionDate (cierre), state (cancelado/adjudicado), objectName o basePrice (alcance/valor); MEDIA si cambia fase o url; BAJA si son campos cosméticos; impactNote explica la consecuencia práctica.",
+    "Paso 5: Actualizar SecopProcess (contentHash nuevo, campos nuevos, rawJson nuevo) y enlazar los ProcessChange a las Opportunities vinculadas (opportunityId).",
+    "Paso 6: Disparar consecuencias: Notification type=PROCESO_MODIFICADO para cambios ALTA/MEDIA y marcar la oportunidad para re-análisis (ANALYZE_TENDER); responder al usuario el delta legible old→new."
+  ],
+  "tools_required": [
+    "Orquestador: runSync (src/lib/sync.ts) — detección por contentHash",
+    "Tablas: ProcessChange, SecopProcess, Notification",
+    "Fuente externa: API Socrata datos.gov.co p6dx-8zbt",
+    "Skill: ANALYZE_TENDER (re-análisis posterior)",
+    "MCP: get_opportunity (delta consultable)"
+  ],
+  "expected_result": "Cada modificación real queda en ProcessChange con old→new e impacto; los procesos cambian de contentHash; oportunidades afectadas reciben Notification y quedan marcadas para re-análisis; cambios puramente cosméticos no generan ruido de impacto ALTA.",
+  "verification": {
+    "metodo": "Diff reproducible sobre datos conocidos.",
+    "pasos": [
+      "Simular un record con basePrice o receptionDate distinto → ProcessChange creado con old/new correctos e impact=ALTA.",
+      "Simular record idéntico → cero ProcessChange y created/updated sin cambios.",
+      "Los ProcessChange tienen opportunityId enlazado cuando existe Opportunity del proceso.",
+      "Notification PROCESO_MODIFICADO existe para todo cambio ALTA/MEDIA."
+    ]
+  },
+  "pitfalls": [
+    "Comparar strings sin normalizar (fechas ISO vs locales, moneda con separadores) → falsos cambios.",
+    "Marcar BAJA un cambio de receptionDate: el cierre se mueve y es el dato más crítico.",
+    "Registrar el cambio pero olvidar actualizar contentHash → re-detección infinita en cada sync.",
+    "No enlazar el cambio a la Opportunity existente (el usuario nunca se entera).",
+    "Borrar el oldValue: sin old→new la detección pierde su propósito forense."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "ProcessChange (es la evidencia del cambio) + Notification + AuditEvent",
+    "truthLevels": {
+      "cambio_observado_en_SECOP": "OBSERVED",
+      "clasificacion_de_impacto": "VERIFIED",
+      "impactNote_consecuencias": "INFERRED"
+    },
+    "regla": "El par old→new se registra literal de la fuente (nunca reinterpretado); el impacto es una regla del sistema; la nota de impacto puede ser inferencia y debe leerse como orientativa; el hash previo/posterior forma parte de la trazabilidad.",
+    "campos_obligatorios_provenance": ["source=SECOP_API", "detectedAt", "field", "oldValue", "newValue"]
+  },
+  "regression_tests": [
+    {
+      "input": { "old": { "basePrice": 10000000 }, "new": { "basePrice": 12000000 } },
+      "expected": { "processChange": { "field": "basePrice", "oldValue": "10000000", "newValue": "12000000", "impact": "ALTA" } }
+    },
+    {
+      "input": { "old": { "receptionDate": "2025-01-10" }, "new": { "receptionDate": "2025-01-20" } },
+      "expected": { "impact": "ALTA", "notification": "PROCESO_MODIFICADO", "re_analisis_disparado": true }
+    },
+    {
+      "input": { "old": { "objectName": "Compra X" }, "new": { "objectName": "Compra X" } },
+      "expected": { "processChange_creado": false }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

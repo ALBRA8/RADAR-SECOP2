@@ -1,5 +1,7 @@
-// Schema del Agente Inteligente SECOP II
-// Entidades según especificación funcional v1.0 (sección 9)
+// Schema del Agente Inteligente SECOP II — RADAR-SECOP2
+// Entidades según especificación funcional v1.0 (sección 9) + PROMPT 05
+// (Evidence Contract §6-7, Modification Detection §12, MemoryDV §13-14,
+//  Skills §15, Autonomy §20, Providers §21, Observability §25)
 
 generator client {
   provider = "prisma-client-js"
@@ -142,6 +144,8 @@ model Opportunity {
   proposals    Proposal[]
   notifications Notification[]
   proposalMessages ProposalMessage[]
+  evidences    Evidence[]
+  changes      ProcessChange[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -155,12 +159,70 @@ model Requirement {
   opportunity    Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
   code           String
   description    String
+  category       String? // HABILITANTE | TECNICO | ECONOMICO | JURIDICO | ADMINISTRATIVO
+  obligatoriness String @default("DESCONOCIDO") // OBLIGATORIO | OPCIONAL | DESEABLE | AMBIGUO | DESCONOCIDO
+  dueDate        DateTime?
   status         String // CUMPLE | NO_CUMPLE | PENDIENTE | REQUIERE_REVISION
-  evidence       String?
+  truthLevel     String? // VERIFIED | OBSERVED | INFERRED | ESTIMATED | UNKNOWN
+  confidence     Float?
+  evidence       String? // resumen legible (la evidencia estructurada vive en Evidence)
   action         String?
   source         String @default("IA") // IA | REGLA
 
+  evidences Evidence[]
+
   createdAt DateTime @default(now())
+}
+
+// ─── EVIDENCE CONTRACT (PROMPT 05 §6-7) ─────────────────────
+// Toda afirmación importante debe poder responder: ¿de dónde salió?, ¿cuándo?,
+// ¿qué documento lo respalda?, ¿fue observado o inferido?
+model Evidence {
+  id                   String  @id @default(cuid())
+  agentId              String  @default("RADAR-SECOP2")
+  source               String  // SECOP_API | PLIEGO_PDF | ANEXO | IMAGEN | AUDIO | VIDEO | CANAL_TELEGRAM | CANAL_WHATSAPP | PERFIL_EMPRESA | CONTRATO | IA_INFERENCIA | MANUAL
+  sourceType           String  // API | DOCUMENT | IMAGE | AUDIO | VIDEO | CHANNEL | USER | PROFILE | INFERRED
+  sourceUrl            String?
+  sourceDocId          String? // CorpDocument.id si aplica
+  sourceMessageId      String? // ChannelMessage.id si proviene de un canal
+  timestamp            DateTime? // momento del hecho observado (si aplica)
+  extractedFact        String
+  context              String?
+  confidence           Float   @default(0.5) // 0..1
+  truthLevel           String  @default("UNKNOWN") // VERIFIED | OBSERVED | INFERRED | ESTIMATED | UNKNOWN
+  verificationStatus   String  @default("UNVERIFIED") // UNVERIFIED | CORROBORATED | CONTRADICTED | EXPIRED
+  provenanceJson       String? // JSON: método de extracción, página, prompt, extractor, hash
+  relatedRequirementId String?
+  relatedOpportunityId String?
+
+  requirement   Requirement?  @relation(fields: [relatedRequirementId], references: [id], onDelete: SetNull)
+  opportunity   Opportunity?  @relation(fields: [relatedOpportunityId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([relatedOpportunityId])
+  @@index([relatedRequirementId])
+  @@index([truthLevel])
+}
+
+// ─── DETECCIÓN DE MODIFICACIONES (PROMPT 05 §12) ────────────
+// Cada modificación registra qué cambió, valor anterior, valor nuevo,
+// timestamp, fuente e impacto potencial.
+model ProcessChange {
+  id            String   @id @default(cuid())
+  processId     String // SecopProcess.id
+  opportunityId String? // Opportunity.id si está vinculada
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  field         String // receptionDate | basePrice | state | objectName | url | ...
+  oldValue      String?
+  newValue      String?
+  impact        String   @default("MEDIA") // ALTA | MEDIA | BAJA + detalle en impactNote
+  impactNote    String?
+  source        String   @default("SECOP_API")
+  detectedAt    DateTime @default(now())
+
+  @@index([processId])
+  @@index([opportunityId])
 }
 
 // ─── PROPUESTAS Y APROBACIÓN (MÓDULOS G y H) ─────────────────
@@ -242,6 +304,11 @@ model Approval {
   decision  String // APROBADA | RECHAZADA
   approver  String
   notes     String?
+  // Snapshot de trazabilidad (PROMPT 05 §19): qué se aprobó exactamente
+  version          Int?
+  unconfirmedCount Int?
+  snapshotJson     String? // JSON: requisitos con estado/truthLevel, hash de secciones, score de la oportunidad
+  executionId      String?
 
   createdAt DateTime @default(now())
 }
@@ -254,8 +321,119 @@ model AuditEvent {
   entityType String?
   entityId   String?
   detail     String?
+  // Observabilidad (PROMPT 05 §25)
+  executionId   String?
+  correlationId String?
+  agentId       String @default("RADAR-SECOP2")
+  latencyMs     Int?
+  status        String? // OK | ERROR | PARTIAL
 
   createdAt DateTime @default(now())
+}
+
+// ─── OBSERVABILITY / EJECUCIONES (PROMPT 05 §25) ────────────
+// Cada ejecución importante es reconstruible: inputs, outputs, evidencia,
+// herramientas, proveedores, errores, aprobaciones, latencia y estado.
+model Execution {
+  id            String  @id @default(cuid())
+  agentId       String  @default("RADAR-SECOP2")
+  correlationId String?
+  operation     String // ANALYZE_OPPORTUNITY | GENERATE_PROPOSAL | SYNC_SECOP | ANALYZE_MEDIA | APPROVE_PROPOSAL | DOCTOR_RUN | ...
+  skillIdentity String? // skill contractual ejecutada si aplica
+  autonomyLevel String  @default("L2_EXECUTE_SAFE") // L0_OBSERVE..L5_SELF_IMPROVE
+  providersJson String? // JSON [{provider, latencyMs, ok, httpStatus}]
+  toolsJson     String?
+  inputsJson    String?
+  outputsJson   String?
+  evidenceIdsJson String?
+  errorsJson    String?
+  approvalsJson String?
+  latencyMs     Int?
+  status        String  @default("SUCCESS") // RUNNING | SUCCESS | PARTIAL | FAILED
+  createdAt     DateTime @default(now())
+
+  @@index([operation])
+  @@index([correlationId])
+}
+
+// ─── PROVIDERS (PROMPT 05 §21) ──────────────────────────────
+// Métricas por proveedor externo: latencia, fallos, disponibilidad.
+model ProviderMetric {
+  id         String  @id @default(cuid())
+  provider   String // SECOP_SOCRATA | LLM_ZAI | ASR_ZAI | VISION_ZAI | TELEGRAM | WHATSAPP
+  operation  String?
+  latencyMs  Int?
+  ok         Boolean
+  httpStatus Int?
+  metaJson   String?
+  createdAt  DateTime @default(now())
+
+  @@index([provider])
+}
+
+// ─── MEMORYDV (PROMPT 05 §13-14) ────────────────────────────
+// Memoria aislada por agent_id y dominio. La memoria FACTUAL exige evidencia:
+// una inferencia del LLM nunca se promociona automáticamente a hecho.
+model MemoryEntry {
+  id            String  @id @default(cuid())
+  agentId       String  @default("RADAR-SECOP2")
+  domain        String  @default("procurement-secop2")
+  type          String // EPISODIC | SEMANTIC | FACTUAL | PROCEDURAL
+  key           String // clave de retrieval, p.ej. "entidad:Jardín Botánico de Bogotá"
+  content       String // JSON o texto del recuerdo
+  summary       String?
+  evidenceIds   String? // JSON array de Evidence.id — obligatorio para FACTUAL
+  truthLevel    String  @default("UNKNOWN") // VERIFIED | OBSERVED | INFERRED | ESTIMATED | UNKNOWN
+  confidence    Float   @default(0.5)
+  tags          String? // JSON array
+  sourceExecutionId String?
+  decayWeight   Float   @default(1.0) // decae con el tiempo; retrieval lo refresca
+  accessCount   Int     @default(0)
+  lastAccessAt  DateTime?
+  consolidatedAt DateTime?
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([agentId, domain, type])
+  @@index([key])
+}
+
+// ─── SKILL CONTRACTS (PROMPT 05 §15) ────────────────────────
+// Capacidades procedurales versionadas, validables y con regresiones.
+model SkillContract {
+  id          String @id @default(cuid())
+  identity    String @unique // DISCOVER_TENDER | ANALYZE_TENDER | ...
+  version     String @default("1.0.0")
+  purpose     String
+  trigger     String?
+  prerequisitesJson String?
+  procedureJson     String?
+  toolsRequiredJson String?
+  expectedResult    String?
+  verificationJson  String?
+  pitfallsJson      String?
+  evidencePolicyJson String?
+  status      String @default("ACTIVE") // ACTIVE | DEPRECATED
+  confidence  Float  @default(0.5)
+  successRate Float  @default(0)
+  runsCount   Int    @default(0)
+  origin      String @default("SEED") // SEED | LEARNED
+  lastValidatedAt DateTime?
+  regressionTestsJson String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── AUTONOMÍA (PROMPT 05 §20) ──────────────────────────────
+// Config de límites de autonomía. L4/L5 deshabilitados por defecto.
+model AutonomyConfig {
+  id          String @id @default(cuid())
+  maxLevel    String @default("L2_EXECUTE_SAFE") // techo global del agente
+  externalActionsAllowed Boolean @default(false) // envíos externos (L3) requieren además aprobación humana
+  notes       String?
+  updatedAt   DateTime @updatedAt
 }
 
 model Notification {

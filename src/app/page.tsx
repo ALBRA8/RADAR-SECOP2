@@ -9,6 +9,7 @@ import { CompanyView } from '@/components/app/company'
 import { AlertsView } from '@/components/app/alerts'
 import { IntegrationsView } from '@/components/app/integrations'
 import { ChannelsView } from '@/components/app/channels'
+import { SystemView } from '@/components/app/system'
 import {
   parseJsonArraySafe,
   normalizeOpp,
@@ -23,10 +24,10 @@ interface DashboardPayload {
   alerts: NotificationData[]
   lastSync: { at: string; detail: string } | null
 }
-import { Radar, LayoutDashboard, Inbox, Building2, Bell, ShieldCheck, Plug, MessageCircleMore } from 'lucide-react'
+import { Radar, LayoutDashboard, Inbox, Building2, Bell, ShieldCheck, Plug, MessageCircleMore, Activity } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
-type View = 'dashboard' | 'oportunidades' | 'detalle' | 'empresa' | 'alertas' | 'integraciones' | 'canales'
+type View = 'dashboard' | 'oportunidades' | 'detalle' | 'empresa' | 'alertas' | 'integraciones' | 'canales' | 'sistema'
 
 export default function Home() {
   const { toast } = useToast()
@@ -289,6 +290,7 @@ export default function Home() {
     { key: 'alertas', label: 'Alertas', icon: Bell, badge: unread },
     { key: 'canales', label: 'Canales', icon: MessageCircleMore },
     { key: 'integraciones', label: 'Integraciones', icon: Plug },
+    { key: 'sistema', label: 'Sistema', icon: Activity },
   ]
 
   return (
@@ -307,12 +309,12 @@ export default function Home() {
               </span>
             </button>
 
-            <nav aria-label="Navegación principal" className="flex items-center gap-0.5 sm:gap-1 shrink-0">
+            <nav aria-label="Navegación principal" className="flex items-center gap-0.5 sm:gap-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {navItems.map((n) => (
                 <button
                   key={n.key}
                   onClick={() => setView(n.key)}
-                  className={`relative flex items-center gap-1.5 rounded-lg px-2 sm:px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-600 min-h-11 min-w-11 ${
+                  className={`relative flex shrink-0 items-center gap-1.5 rounded-lg px-2 sm:px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-600 min-h-11 min-w-11 ${
                     view === n.key || (n.key === 'oportunidades' && view === 'detalle')
                       ? 'bg-emerald-100 text-emerald-800'
                       : 'text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -376,6 +378,7 @@ export default function Home() {
         )}
         {view === 'integraciones' && <IntegrationsView />}
         {view === 'canales' && <ChannelsView />}
+        {view === 'sistema' && <SystemView />}
       </main>
 
       {/* Pie pegado al fondo */}

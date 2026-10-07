@@ -1,9 +1,11 @@
 import { db } from '@/lib/db'
 import { safe, bad } from '@/lib/api'
+import { withExecution } from '@/lib/observe'
 import { generateProposal } from '@/lib/ai'
 import { parseJsonArray, type CompanyConfigData, type DocumentData, type ExperienceData, type ProductItemData } from '@/lib/types'
 
 // MÓDULO G — Generación de borrador de propuesta (requiere oportunidad aprobada para preparación)
+// Observability §25: toda generación queda reconstruible vía Execution (GENERATE_PROPOSAL).
 export async function POST(req: Request) {
   return safe(async () => {
     const body = await req.json()
@@ -56,33 +58,47 @@ export async function POST(req: Request) {
       source: r.source as 'IA' | 'REGLA',
     }))
 
-    const draft = await generateProposal(opp.process, bundle, requirements)
-
-    const lastVersion = await db.proposal.findFirst({ where: { opportunityId }, orderBy: { version: 'desc' } })
-    const version = (lastVersion?.version ?? 0) + 1
-
-    const proposal = await db.proposal.create({
-      data: {
-        companyId: company.id,
-        opportunityId,
-        version,
-        status: 'BORRADOR',
-        sectionsJson: JSON.stringify(draft.sections),
-        checklistsJson: JSON.stringify(draft.checklists),
-        logicFrameworkJson: draft.marcoLogico ? JSON.stringify(draft.marcoLogico) : null,
-        unconfirmedCount: draft.unconfirmedCount,
+    const { result, executionId } = await withExecution(
+      'GENERATE_PROPOSAL',
+      {
+        skillIdentity: 'GENERATE_TENDER',
+        autonomyLevel: 'L2_EXECUTE_SAFE',
+        inputs: { opportunityId, processId: opp.process.id, engineHint: undefined },
+        tools: ['generateProposal'],
       },
-    })
+      async () => {
+        const draft = await generateProposal(opp.process, bundle, requirements)
 
-    await db.auditEvent.create({
-      data: {
-        action: 'GENERAR_PROPUESTA',
-        entityType: 'Proposal',
-        entityId: proposal.id,
-        detail: `Versión ${version} generada con motor ${draft.engine}. ${draft.unconfirmedCount} dato(s) marcado(s) por confirmar.${draft.marcoLogico ? ' Incluye marco lógico.' : ''}`,
+        const lastVersion = await db.proposal.findFirst({ where: { opportunityId }, orderBy: { version: 'desc' } })
+        const version = (lastVersion?.version ?? 0) + 1
+
+        const proposal = await db.proposal.create({
+          data: {
+            companyId: company.id,
+            opportunityId,
+            version,
+            status: 'BORRADOR',
+            sectionsJson: JSON.stringify(draft.sections),
+            checklistsJson: JSON.stringify(draft.checklists),
+            logicFrameworkJson: draft.marcoLogico ? JSON.stringify(draft.marcoLogico) : null,
+            unconfirmedCount: draft.unconfirmedCount,
+          },
+        })
+
+        await db.auditEvent.create({
+          data: {
+            action: 'GENERAR_PROPUESTA',
+            entityType: 'Proposal',
+            entityId: proposal.id,
+            detail: `Versión ${version} generada con motor ${draft.engine}. ${draft.unconfirmedCount} dato(s) marcado(s) por confirmar.${draft.marcoLogico ? ' Incluye marco lógico.' : ''}`,
+          },
+        })
+
+        return { proposal: { ...proposal, sections: draft.sections, checklists: draft.checklists, marcoLogico: draft.marcoLogico }, engine: draft.engine }
       },
-    })
+    )
 
-    return { proposal: { ...proposal, sections: draft.sections, checklists: draft.checklists, marcoLogico: draft.marcoLogico }, engine: draft.engine }
+    // Aditivo: executionId permite reconstruir la ejecución en /api/executions y get_executions (MCP).
+    return { ...result, executionId }
   })
 }

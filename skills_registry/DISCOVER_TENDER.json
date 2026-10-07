@@ -1,0 +1,73 @@
+{
+  "identity": "DISCOVER_TENDER",
+  "version": "1.0.0",
+  "purpose": "Descubrir oportunidades de contratación pública relevantes sincronizando procesos recientes de SECOP II (dataset p6dx-8zbt de datos.gov.co) y aplicando el filtro determinístico del perfil de empresa, dejando oportunidades NUEVA con score y ranking calculados.",
+  "trigger": "Se activa cuando el usuario pide 'buscar/refrescar oportunidades', cuando el dashboard no muestra procesos recientes, o de forma programada antes del ciclo de análisis diario.",
+  "prerequisites": [
+    "Existe al menos un registro Company en la base de datos (el filtro determinístico opera sobre su perfil).",
+    "Conectividad saliente hacia https://www.datos.gov.co (API Socrata).",
+    "Tablas SecopProcess y Opportunity migradas y disponibles."
+  ],
+  "procedure": [
+    "Paso 1: Ejecutar POST /api/secop/sync (o la tool MCP sync_secop) con {days: 45, limit: 300}; valores ajustables si el usuario pide otra ventana.",
+    "Paso 2: El sincronizador consulta Socrata con SoQL ordenado por fecha de publicación descendente; verificar que la respuesta reporta filas consultadas > 0.",
+    "Paso 3: Confirmar dedup: cada proceso se upserta por id_del_proceso y el contentHash SHA-256 evita reescrituras innecesarias.",
+    "Paso 4: Verificar que runSync aplicó el filtro determinístico del perfil (rango económico, fase, modalidad, tipo de contrato, cobertura, palabras clave) y creó Opportunity con status NUEVA solo para los procesos que pasan.",
+    "Paso 5: Confirmar recomputeRanking(): las oportunidades activas tienen rank y score actualizados por relevancia.",
+    "Paso 6: Reportar al usuario un resumen numérico: procesos consultados, nuevos, actualizados, descartados (con motivos) y oportunidades creadas; registrar el resultado en Execution (operation SYNC_SECOP)."
+  ],
+  "tools_required": [
+    "POST /api/secop/sync (runSync en src/lib/sync.ts)",
+    "MCP: sync_secop",
+    "MCP: search_opportunities",
+    "MCP: get_dashboard_stats",
+    "Filtro determinístico: evaluateCompatibility (src/lib/compat.ts)",
+    "Fuente externa: API Socrata datos.gov.co dataset p6dx-8zbt"
+  ],
+  "expected_result": "Respuesta de sync con {consulted, created, updated, discarded} coherentes; SecopProcess poblado con procesos recientes; solo las oportunidades que pasan el filtro quedan como Opportunity status NUEVA; ranking recomputado; resumen legible entregado al usuario.",
+  "verification": {
+    "metodo": "Verificación numérica y de presencia en base de datos.",
+    "pasos": [
+      "GET /api/opportunities devuelve oportunidades con status NUEVA y createdAt >= inicio del sync.",
+      "El conteo de SecopProcess creados es igual al campo 'created' reportado por el sync.",
+      "Ninguna Opportunity creada viola el filtro (ej. basePrice fuera de minBudget/maxBudget debe aparecer descartada con motivo explícito).",
+      "Execution con operation=SYNC_SECOP y status SUCCESS registrada."
+    ]
+  },
+  "pitfalls": [
+    "Ejecutar el sync sin Company registrada: el filtro no tiene perfil y el resultado es vacío o engañoso.",
+    "Confundir 'procesos consultados' con 'oportunidades creadas': casi siempre consultados >> creadas por el filtro.",
+    "Usar una ventana days demasiado corta (ej. 1 día) en fines de semana y concluir que SECOP está caído.",
+    "Reintentar el sync en bucle ante error 429/503 de Socrata sin respetar backoff.",
+    "Reportar éxito sin revisar que recomputeRanking efectivamente dejó rank no nulo."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "Evidence + AuditEvent + Execution",
+    "truthLevels": {
+      "datos_de_procesos": "OBSERVED",
+      "conteos_del_sync": "OBSERVED",
+      "motivos_de_descarte": "VERIFIED"
+    },
+    "regla": "Cada oportunidad creada debe poder rastrearse a su SecopProcess (processId) y al record crudo de SECOP (rawJson); los motivos de descarte son determinísticos y se registran tal cual, sin inferencia del LLM.",
+    "campos_obligatorios_provenance": ["source", "sourceType=API", "sourceUrl (URL del proceso en SECOP)", "timestamp"]
+  },
+  "regression_tests": [
+    {
+      "input": { "action": "POST /api/secop/sync", "body": { "days": 45, "limit": 300 } },
+      "expected": { "status": 200, "body": { "consulted": ">=0", "created": ">=0", "error": null } }
+    },
+    {
+      "input": { "escenario": "proceso con basePrice por debajo de minBudget de la empresa" },
+      "expected": { "opportunity_creada": false, "motivo_descarte": "incluye rango económico" }
+    },
+    {
+      "input": { "escenario": "sync repetido dos veces sin cambios en SECOP" },
+      "expected": { "segunda_ejecucion": { "created": 0, "updated": 0 }, "sin_duplicados_por_id_del_proceso": true }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}

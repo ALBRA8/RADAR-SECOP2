@@ -75,6 +75,12 @@ export interface RequirementItem {
   evidence?: string
   action?: string
   source?: 'IA' | 'REGLA'
+  // ── Task 2-a (aditivo, backward compatible) ──
+  category?: string // HABILITANTE | TECNICO | ECONOMICO | JURIDICO | ADMINISTRATIVO
+  obligatoriness?: string // OBLIGATORIO | OPCIONAL | DESEABLE | AMBIGUO | DESCONOCIDO
+  dueDate?: string | null // fecha límite mencionada por el pliego (ISO) o null
+  truthLevel?: string // VERIFIED | OBSERVED | INFERRED | ESTIMATED | UNKNOWN
+  confidence?: number // 0..1
 }
 
 export interface AnalysisResult {

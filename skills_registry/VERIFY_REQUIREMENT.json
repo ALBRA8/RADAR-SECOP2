@@ -1,0 +1,74 @@
+{
+  "identity": "VERIFY_REQUIREMENT",
+  "version": "1.0.0",
+  "purpose": "Verificar requisito por requisito el cumplimiento de la empresa, aplicando la regla de oro del proyecto: INFERRED nunca respalda CUMPLE; cada verificación produce status (CUMPLE|NO_CUMPLE|PENDIENTE|REQUIERE_REVISION) con evidencia y acción concretas.",
+  "trigger": "Se activa tras EXTRACT_REQUIREMENTS dentro de ANALYZE_TENDER, cuando el usuario actualiza su perfil o documentos y pide re-verificar, o cuando llega evidencia nueva por canales que afecta un requisito.",
+  "prerequisites": [
+    "Requirement(s) existentes para la Opportunity con categoría y obligatoriedad ya extraídas.",
+    "Perfil de empresa disponible: ProductService, ExperienceItem, CorpDocument (única fuente legítima de VERIFIED).",
+    "Evidence previa cargada para el requisito (si no hay, el estado máximo alcanzable es PENDIENTE/REQUIERE_REVISION)."
+  ],
+  "procedure": [
+    "Paso 1: Cargar el requisito y su evidencia asociada (Evidence.relatedRequirementId) más el perfil completo de la empresa.",
+    "Paso 2: Buscar respaldo directo: coincidencia del requisito con items de producto/servicio, experiencia o documentos corporativos (comparación semántica permitida, pero la existencia del respaldo es un hecho del perfil).",
+    "Paso 3: Aplicar la regla de oro: si el único respaldo es una inferencia del LLM (truthLevel=INFERRED) o una estimación, el status NO puede ser CUMPLE; como máximo PENDIENTE o REQUIERE_REVISION con la acción de corroborar.",
+    "Paso 4: Asignar status: CUMPLE solo con respaldo VERIFIED u OBSERVED (perfil, documento o fuente externa corroborada); NO_CUMPLE si existe contradicción observada; PENDIENTE si falta documento; REQUIERE_REVISION si el requisito es AMBIGUO o la evidencia es contradictoria.",
+    "Paso 5: Redactar evidence (resumen legible con la cita) y action (qué hacer concreto: 'adjuntar RUP vigente', 'solicitar aclaración a la entidad', etc.).",
+    "Paso 6: Persistir Requirement con status, truthLevel, confidence y evidence; registrar Evidence nueva si la verificación produjo un hallazgo; dejar rastro en AuditEvent."
+  ],
+  "tools_required": [
+    "Tablas: Requirement, Evidence, ProductService, ExperienceItem, CorpDocument",
+    "MCP: get_company_profile",
+    "MCP: get_opportunity",
+    "Skill: COLLECT_EVIDENCE (para hallazgos nuevos)",
+    "Modelo: src/lib/ai.ts (solo como comparador semántico, nunca como fuente de verdad)"
+  ],
+  "expected_result": "Cada Requirement con status coherente con su evidencia: cero CUMPLE respaldados solo por INFERRED; truthLevel y confidence acordes; action concreta en los casos PENDIENTE/REQUIERE_REVISION; trazabilidad completa requisito→evidencia→fuente.",
+  "verification": {
+    "metodo": "Auditoría de la regla de oro sobre la matriz.",
+    "pasos": [
+      "Query: ningún Requirement con status=CUMPLE tiene truthLevel ∈ {INFERRED, ESTIMATED, UNKNOWN} sin Evidence VERIFIED/OBSERVED que lo respalde.",
+      "Los NO_CUMPLE citan la contradicción observada (documento vencido, experiencia insuficiente).",
+      "Los PENDIENTE tienen action que nombra el documento o dato faltante.",
+      "Spot-check manual de 3 requisitos contra el perfil confirma los status."
+    ]
+  },
+  "pitfalls": [
+    "VIOLACIÓN de la regla de oro: marcar CUMPLE porque el LLM 'cree' que la empresa cumple.",
+    "Usar datos de otra empresa u oportunidades pasadas como si fueran del perfil actual.",
+    "Confundir PENDIENTE (falta papel) con NO_CUMPLE (no hay capacidad): acciones muy distintas.",
+    "Aceptar documentos sin estado: un CorpDocument VENCIDO no respalda CUMPLE.",
+    "Actualizar status sin actualizar truthLevel/confidence (inconsistencia observable)."
+  ],
+  "evidence_policy": {
+    "requiere_evidencia": true,
+    "guardar_en": "Evidence (relatedRequirementId) + Requirement.evidence + AuditEvent",
+    "truthLevels": {
+      "respaldo_de_perfil": "VERIFIED",
+      "respaldo_de_pliego_o_SECOP": "OBSERVED",
+      "corroborado_por_dos_fuentes": "VERIFIED",
+      "solo_inferencia_LLM": "INFERRED",
+      "sin_evidencia": "UNKNOWN"
+    },
+    "regla": "REGLA DE ORO: INFERRED nunca respalda CUMPLE. CUMPLE exige truthLevel VERIFIED u OBSERVED con Evidence enlazada; toda degradación de confianza debe reflejarse en el campo confidence del requisito.",
+    "campos_obligatorios_provenance": ["source", "sourceType", "extractedFact (cita del respaldo)", "truthLevel", "confidence", "provenanceJson"]
+  },
+  "regression_tests": [
+    {
+      "input": { "requisito": "RUP vigente", "respaldo": { "corpDocument": "RUP 2025 DISPONIBLE" } },
+      "expected": { "status": "CUMPLE", "truthLevel": "VERIFIED", "regla_de_oro_respetada": true }
+    },
+    {
+      "input": { "requisito": "Experiencia 3 contratos similares", "respaldo": { "llm_sugiere": "parece que cumple por descripción" } },
+      "expected": { "status": "PENDIENTE|REQUIERE_REVISION", "status_no_es_CUMPLE": true, "truthLevel": "INFERRED" }
+    },
+    {
+      "input": { "requisito": "Certificación HACCP", "respaldo": { "corpDocument": "HACCP VENCIDO" } },
+      "expected": { "status": "NO_CUMPLE", "evidence": "cita el vencimiento", "action": "renovar o aclarar" }
+    }
+  ],
+  "confidence": 0.5,
+  "success_rate": 0,
+  "origin": "SEED",
+  "last_validated": null
+}
